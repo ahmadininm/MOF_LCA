@@ -1,11 +1,11 @@
 route_id,route_name,product_name,reagent_name,mass_kg_per_fu,electricity_kwh_per_fu,electricity_source,notes
-ref,Ref-Bead (Polymer),PDChNF-Chitosan Bead,Chitosan,0.8571,93600,Electricity (Canada),"Mass fraction 6:1 Chitosan:PDChNF[cite: 124, 128]. Elec: 9.36e4 kWh/kg."
-ref,Ref-Bead (Polymer),PDChNF-Chitosan Bead,PDChNF,0.1429,93600,Electricity (Canada),[cite: 128]
-ref,Ref-Bead (Polymer),PDChNF-Chitosan Bead,Acetic acid,0.15,93600,Electricity (Canada),Approx 0.15 kg/kg bead[cite: 151].
-mof,U@Bead (MOF-Functionalised),UiO-66-NH2 Composite,Chitosan,0.7457,156000,Electricity (Canada),Support scaled by 0.87 (13wt% MOF)[cite: 276]. Elec: 1.56e5 kWh/kg.
-mof,U@Bead (MOF-Functionalised),UiO-66-NH2 Composite,PDChNF,0.1243,156000,Electricity (Canada),Support scaled by 0.87[cite: 276].
-mof,U@Bead (MOF-Functionalised),UiO-66-NH2 Composite,Acetic acid,0.1305,156000,Electricity (Canada),Support scaled by 0.87[cite: 278].
-mof,U@Bead (MOF-Functionalised),UiO-66-NH2 Composite,Zirconium tetrachloride,1.0833,156000,Electricity (Canada),0.65g per 0.6g batch -> 1.08 kg/kg[cite: 237].
-mof,U@Bead (MOF-Functionalised),UiO-66-NH2 Composite,2-Aminoterephthalic acid,0.7833,156000,Electricity (Canada),0.47g per 0.6g batch -> 0.78 kg/kg[cite: 240].
-mof,U@Bead (MOF-Functionalised),UiO-66-NH2 Composite,Formic acid (88%),30.42,156000,Electricity (Canada),17mL (20.7g) per 0.6g batch -> 30.42 kg/kg[cite: 248].
-mof,U@Bead (MOF-Functionalised),UiO-66-NH2 Composite,Ethanol,65.75,156000,Electricity (Canada),50mL (39.5g) per 0.6g batch -> 65.75 kg/kg[cite: 254].
+ref,Ref-Bead (Polymer),PDChNF-Chitosan Bead,Chitosan,0.8571,93600,Electricity (Canada),"Mass fraction 6:1 Chitosan:PDChNF"
+ref,Ref-Bead (Polymer),PDChNF-Chitosan Bead,PDChNF,0.1429,93600,Electricity (Canada),""
+ref,Ref-Bead (Polymer),PDChNF-Chitosan Bead,Acetic acid,0.150,93600,Electricity (Canada),"Approx 0.15 kg/kg bead"
+mof,U@Bead (MOF-Functionalised),UiO-66-NH2 Composite,Chitosan,0.7457,156000,Electricity (Canada),"Support scaled by 0.87 (13wt% MOF)"
+mof,U@Bead (MOF-Functionalised),UiO-66-NH2 Composite,PDChNF,0.1243,156000,Electricity (Canada),"Support scaled by 0.87"
+mof,U@Bead (MOF-Functionalised),UiO-66-NH2 Composite,Acetic acid,0.1305,156000,Electricity (Canada),"Support scaled by 0.87"
+mof,U@Bead (MOF-Functionalised),UiO-66-NH2 Composite,Zirconium tetrachloride,1.0833,156000,Electricity (Canada),"0.65g per 0.6g batch -> 1.08 kg/kg"
+mof,U@Bead (MOF-Functionalised),UiO-66-NH2 Composite,2-Aminoterephthalic acid,0.7833,156000,Electricity (Canada),"0.47g per 0.6g batch -> 0.78 kg/kg"
+mof,U@Bead (MOF-Functionalised),UiO-66-NH2 Composite,Formic acid (88%),30.42,156000,Electricity (Canada),"17mL (20.7g) per 0.6g batch -> 30.42 kg/kg"
+mof,U@Bead (MOF-Functionalised),UiO-66-NH2 Composite,Ethanol,65.75,156000,Electricity (Canada),"50mL (39.5g) per 0.6g batch -> 65.75 kg/kg"
