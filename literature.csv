@@ -1,0 +1,12 @@
+Material,Functional unit (FU),GWP (kg CO?-eq per FU),Notes,Reference
+"UiO-66-NH?, solvothermal route 1","1 kg UiO-66-NH?, cradle-to-gate",353,DMF-based solvothermal synthesis,Luo et al. 2021
+"UiO-66-NH?, solvothermal route 2","1 kg UiO-66-NH?, cradle-to-gate",180,Alternative DMF-based solvothermal route,Luo et al. 2021
+"UiO-66-NH?, aqueous route","1 kg UiO-66-NH?, cradle-to-gate",43,Optimised aqueous synthesis route,Luo et al. 2021
+"UiO-66 (Zr), commercial manufacturing","1 kg UiO-66 (Zr), cradle-to-gate",273.8,Industrial / commercial UiO-66 production,Dutta et al. 2024
+"Activated carbon, coal-derived","1 kg AC, cradle-to-gate",18.28,Coal-based AC for water treatment,Gu et al. 2018
+"Activated carbon, wood-derived","1 kg AC, cradle-to-gate",8.6,Wood-based AC for water treatment,Gu et al. 2018
+Ni–Fe LDH / chitosan composite (coal electricity),1 kg composite treating 1000 L As(III) solution,62.58,Synthesis + use + recycling under coal-dominated mix,Bisaria et al. 2023
+Ni–Fe LDH / chitosan composite (renewables),1 kg composite treating 1000 L As(III) solution,31.21,Same system under renewable-dominated electricity,Bisaria et al. 2023
+Biochar (meta-analysis),"1 kg adsorbent, cradle-to-gate",1.2,Mean GWP for biochar adsorbents,Arfasa & Tilahun 2025
+Biomass-derived adsorbents (incl. AC),"1 kg adsorbent, cradle-to-gate",2.5–3.2,Mean range for biomass-derived adsorbents,Arfasa & Tilahun 2025
+MOF adsorbents ,"1 kg adsorbent, cradle-to-gate",25,Mean GWP for MOF-based adsorbents,Arfasa & Tilahun 2025
