@@ -107,7 +107,7 @@ with st.sidebar:
     
     # --- QUICK ADJUST (Sliders) ---
     st.subheader("1. Quick Adjustments")
-    st.caption("Simulate scenarios beyond the paper's baseline.")
+    st.caption("Use these sliders to simulate different production scenarios.")
     
     # 1. Grid Intensity
     current_grid_ef = float(st.session_state["ef_df"].loc[
@@ -116,11 +116,16 @@ with st.sidebar:
     ].iloc[0])
     
     new_grid_ef = st.slider(
-        "Grid Intensity (kg CO2/kWh)", 
+        "⚡ Grid Carbon Intensity (kg CO2/kWh)", 
         min_value=0.0, max_value=1.0, 
         value=current_grid_ef, 
         step=0.01,
-        help="0.12=Canada, 0.38=US, 0.58=China"
+        help="Controls how 'clean' the electricity is.\n\n"
+             "• 0.00: Hydro/Wind/Solar (Zero Carbon)\n"
+             "• 0.12: Canada Average (Baseline)\n"
+             "• 0.38: US Average\n"
+             "• 0.58: China Grid (Coal heavy)\n"
+             "• 0.80+: Coal Power Plant"
     )
     
     if new_grid_ef != current_grid_ef:
@@ -130,19 +135,44 @@ with st.sidebar:
         ] = new_grid_ef
 
     # 2. Process Efficiency (Scaling Factor)
-    st.write("**Process Efficiency**")
+    st.write("**🏭 Process Efficiency**")
     eff_factor = st.slider(
         "Efficiency Multiplier", 
         min_value=0.1, max_value=1.0, value=1.0, 
-        help="1.0 = Lab Scale (Baseline). 0.5 = 50% less electricity (Pilot Scale)."
+        help="Simulates scaling up from lab to factory.\n\n"
+             "• 1.0 = Lab Scale (Current Baseline). Inefficient, small batches.\n"
+             "• 0.5 = Pilot Scale. Uses 50% less electricity per kg.\n"
+             "• 0.1 = Industrial Scale. Highly optimized machines."
     )
 
     # 3. Solvent Recovery
-    st.write("**Solvent Recovery**")
+    st.write("**♻️ Solvent Recovery**")
     recycle_rate = st.slider(
         "Recycling Rate (%)", 
         min_value=0, max_value=95, value=0,
-        help="Reduces impact of Ethanol and Formic Acid."
+        help="Simulates capturing and reusing solvents (Ethanol, Formic Acid).\n\n"
+             "• 0%: No recycling (Single use).\n"
+             "• 90%: Most solvent is reused, drastically reducing chemical footprint."
+    )
+
+    # 4. Yield
+    st.write("**🧪 Synthesis Yield**")
+    yield_rate = st.slider(
+        "Global Yield (%)",
+        min_value=10, max_value=100, value=100,
+        help="Simulates material losses.\n\n"
+             "• 100%: Perfect yield (Baseline assumption).\n"
+             "• 50%: Half the product is lost. You need 2x the raw materials and electricity to make the same amount of final beads."
+    )
+
+    # 5. Transport Overhead
+    st.write("**🚛 Transport & Logistics**")
+    transport_overhead = st.slider(
+        "Add Transport Overhead (%)",
+        min_value=0, max_value=50, value=0,
+        help="Adds a percentage to the total GWP to account for shipping raw materials.\n\n"
+             "• 0%: Gate-to-Gate (Factory only).\n"
+             "• 10-20%: Typical overhead for global supply chains."
     )
 
     st.divider()
@@ -175,14 +205,18 @@ LIT_DF = st.session_state["lit_df"]
 # -----------------------------------------------------------------------------
 # CALCULATION ENGINE
 # -----------------------------------------------------------------------------
-def calculate_impacts(route_id, ef_df, routes_df, efficiency_factor=1.0, recycling_rate=0.0):
+def calculate_impacts(route_id, ef_df, routes_df, efficiency_factor=1.0, recycling_rate=0.0, yield_rate=100.0, transport_pct=0.0):
     """Calculates GWP based on session state and efficiency modifiers."""
     route_data = routes_df[routes_df["route_id"] == route_id].copy()
     if route_data.empty: return None, None
 
-    # Electricity (Scaled by efficiency)
+    # Yield Factor: If yield is 50%, we need 1/0.5 = 2x input
+    yield_multiplier = 1.0 / (yield_rate / 100.0)
+
+    # Electricity
     base_elec_kwh = float(route_data.iloc[0]["electricity_kwh_per_fu"])
-    elec_kwh = base_elec_kwh * efficiency_factor
+    # Apply Efficiency (Scale up) AND Yield (Material loss)
+    elec_kwh = base_elec_kwh * efficiency_factor * yield_multiplier
     
     elec_source = route_data.iloc[0]["electricity_source"]
     ef_elec_row = ef_df[ef_df["reagent_name"] == elec_source]
@@ -195,32 +229,43 @@ def calculate_impacts(route_id, ef_df, routes_df, efficiency_factor=1.0, recycli
 
     for _, row in route_data.iterrows():
         reagent = row["reagent_name"]
-        mass = float(row["mass_kg_per_fu"])
+        base_mass = float(row["mass_kg_per_fu"])
         
-        # Apply recycling reduction to solvents
+        # 1. Apply Yield (need more input if yield is low)
+        mass_needed = base_mass * yield_multiplier
+
+        # 2. Apply Recycling (reduce effective GWP impact)
+        # Only applies to solvents
         is_solvent = reagent in ["Ethanol", "Formic acid (88%)", "Acetic acid"]
-        current_mass = mass * (1 - (recycling_rate/100)) if is_solvent else mass
+        effective_mass = mass_needed * (1 - (recycling_rate/100)) if is_solvent else mass_needed
         
         ef_row = ef_df[ef_df["reagent_name"] == reagent]
         ef_val = float(ef_row["GWP_kgCO2_per_kg"].iloc[0]) if not ef_row.empty else 0.0
         
-        gwp_val = current_mass * ef_val
+        gwp_val = effective_mass * ef_val
         total_reagent_gwp += gwp_val
         
         if reagent in ["Chitosan", "PDChNF"]: cat = "Polymers"
         elif reagent in ["Zirconium tetrachloride", "2-Aminoterephthalic acid", "Formic acid (88%)", "Ethanol"]: cat = "MOF Reagents"
         else: cat = "Solvents/Other"
             
-        contributions.append({"Component": reagent, "Category": cat, "Mass (kg)": current_mass, "GWP": gwp_val})
+        contributions.append({"Component": reagent, "Category": cat, "Mass (kg)": effective_mass, "GWP": gwp_val})
 
-    total_gwp = gwp_elec + total_reagent_gwp
+    # Transport Overhead
+    raw_total_gwp = gwp_elec + total_reagent_gwp
+    transport_gwp = raw_total_gwp * (transport_pct / 100.0)
+    
+    if transport_gwp > 0:
+        contributions.append({"Component": "Transport", "Category": "Logistics", "Mass (kg)": 0.0, "GWP": transport_gwp})
+
+    final_total_gwp = raw_total_gwp + transport_gwp
     
     results = {
         "id": route_id,
         "name": route_data.iloc[0]["route_name"],
-        "Total GWP": total_gwp,
+        "Total GWP": final_total_gwp,
         "Electricity GWP": gwp_elec,
-        "Non-Electric GWP": total_reagent_gwp,
+        "Non-Electric GWP": total_reagent_gwp + transport_gwp,
         "Electricity kWh": elec_kwh,
         "Electricity EF Used": ef_elec
     }
@@ -231,9 +276,7 @@ def calculate_impacts(route_id, ef_df, routes_df, efficiency_factor=1.0, recycli
 # -----------------------------------------------------------------------------
 def plot_sankey_diagram(results_list):
     """Generates a Sankey diagram showing flow of impacts."""
-    # We will aggregate impacts across all active routes for a general flow view
-    # Or just visualize the first route (U@Bead) as it's the most complex
-    
+    # Visualize the first route (U@Bead) as it's the most complex
     target_res = next((r for r in results_list if r["id"] == ID_MOF), results_list[0])
     
     # Values
@@ -241,18 +284,8 @@ def plot_sankey_diagram(results_list):
     chem_gwp = target_res["Non-Electric GWP"]
     total_gwp = target_res["Total GWP"]
     
-    # Nodes: 0=Inputs, 1=Electricity, 2=Chemicals, 3=Bead Production, 4=GWP Impact
     labels = ["Electricity Source", "Chemical Supply", "Lab Synthesis", "Total GWP"]
     colors = ["#FFD700", "#90EE90", "#87CEFA", "#FF6347"]
-    
-    # Links
-    sources = [0, 1, 2, 2]
-    targets = [2, 2, 3, 3] # Elec->Syn, Chem->Syn, Syn->GWP
-    
-    # Simplified: 
-    # 0(Elec) -> 2(Syn)
-    # 1(Chem) -> 2(Syn)
-    # 2(Syn) -> 3(Total)
     
     fig = go.Figure(data=[go.Sankey(
         node = dict(
@@ -278,7 +311,7 @@ def main():
     st.title("Interactive LCA Explorer: Ref-Bead vs U@Bead")
     st.markdown("""
     **Overview:** This dashboard allows interactive analysis of the screening LCA.
-    Use the **Control Panel** to simulate scaling effects (efficiency) or recycling scenarios.
+    Use the **Control Panel** on the left to simulate scaling effects, recycling, or yield loss.
     """)
 
     # --- CALCULATION LOOP ---
@@ -287,7 +320,13 @@ def main():
     dfs_list = []
     
     for rid in unique_routes:
-        res, df = calculate_impacts(rid, EF_DF, ROUTES_DF, efficiency_factor=eff_factor, recycling_rate=recycle_rate)
+        res, df = calculate_impacts(
+            rid, EF_DF, ROUTES_DF, 
+            efficiency_factor=eff_factor, 
+            recycling_rate=recycle_rate,
+            yield_rate=yield_rate,
+            transport_pct=transport_overhead
+        )
         if res:
             results_list.append(res)
             dfs_list.append(df)
@@ -353,7 +392,7 @@ def main():
             temp_ef = EF_DF.copy()
             temp_ef.loc[temp_ef["reagent_name"].str.contains("Electricity"), "GWP_kgCO2_per_kg"] = g_val
             for rid in unique_routes:
-                res, _ = calculate_impacts(rid, temp_ef, ROUTES_DF, efficiency_factor=eff_factor, recycling_rate=recycle_rate)
+                res, _ = calculate_impacts(rid, temp_ef, ROUTES_DF, efficiency_factor=eff_factor, recycling_rate=recycle_rate, yield_rate=yield_rate)
                 sens_rows.append({"Grid": g_name, "Bead": res["name"], "Total GWP": res["Total GWP"]})
         
         df_sens = pd.DataFrame(sens_rows)
@@ -403,25 +442,32 @@ def main():
 
             st.divider()
 
-            # 2. Total Impacts Including Electricity (GROUPED for readability)
+            # 2. Total Impacts Including Electricity (GROUPED for readability + LOG SCALE)
             st.subheader("B. Total Process Impacts (Electricity vs Chemicals)")
-            st.caption("Side-by-side comparison of electricity vs chemical components.")
+            st.caption("Side-by-side comparison. Note: Logarithmic scale is used to show chemicals clearly next to electricity.")
             fig_total_breakdown = px.bar(df_all, x="Bead", y="GWP", color="Component", 
-                                         title="Total GWP Breakdown", barmode="group")
+                                         title="Total GWP Breakdown (Log Scale)", 
+                                         barmode="group",
+                                         log_y=True) # Added Log Scale for readability
             st.plotly_chart(fig_total_breakdown, use_container_width=True)
             
             st.divider()
 
-            # 3. Mass Inventory (FACETED for readability)
+            # 3. Mass Inventory (FACETED & UNCOUPLED AXES)
             st.subheader("C. Mass Inventory")
             st.caption("Separated by bead type to ensure low-mass components in Ref-Bead are visible.")
-            fig_mass = px.bar(df_ne, x="Component", y="Mass (kg)", color="Component",
-                              facet_col="Bead",  # Separate panels
-                              title="Mass Input per kg Product", 
-                              matches=None)      # Independent Y-axes
             
-            # Ensure Y-axes are independent so Ref-Bead (small) isn't dwarfed by U@Bead (huge)
+            fig_mass = px.bar(
+                df_ne, 
+                x="Component", 
+                y="Mass (kg)", 
+                color="Component",
+                facet_col="Bead",  # Separate panels
+                title="Mass Input per kg Product"
+            )
+            # FIX: Uncouple Y-axes so Ref-Bead scale is independent of U@Bead
             fig_mass.update_yaxes(matches=None, showticklabels=True)
+            
             st.plotly_chart(fig_mass, use_container_width=True)
         
         st.subheader("D. Impact Flow (Sankey Diagram)")
@@ -448,7 +494,7 @@ def main():
                          text="Source")
         
         st.plotly_chart(fig_lit, use_container_width=True)
-        st.caption("Log scale used due to high variation between lab-scale and industrial benchmarks.")
+        st.caption("Each color represents a distinct data source.")
 
 if __name__ == "__main__":
     main()
