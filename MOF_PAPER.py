@@ -4,6 +4,7 @@ import plotly.graph_objects as go
 import streamlit as st
 from pathlib import Path
 import numpy as np
+import graphviz
 
 # Attempt to import OpenAI
 try:
@@ -18,12 +19,35 @@ except ImportError:
 # -----------------------------------------------------------------------------
 BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = BASE_DIR / "data"
+LOGO_DIR = BASE_DIR # Assuming logos are in the root folder
 
 # Route IDs
 ID_REF = "ref"
 ID_MOF = "mof"
 
 st.set_page_config(page_title="LCA Explorer: Interactive & AI-Enhanced", layout="wide")
+
+# -----------------------------------------------------------------------------
+# HARDCODED PROCESS BREAKDOWN (For the new Electricity Figure)
+# -----------------------------------------------------------------------------
+# Since the CSV only provides total electricity, we approximate the breakdown 
+# based on the equipment descriptions in the paper (Table 3/SI).
+PROCESS_BREAKDOWN = {
+    ID_REF: {
+        "Mixing & Dissolution (50°C)": 0.05,
+        "Phase Inversion (Pumping)": 0.02,
+        "Crosslinking (Heating)": 0.08,
+        "Washing": 0.05,
+        "Freeze Drying": 0.80  # Lab scale freeze drying is dominant
+    },
+    ID_MOF: {
+        "Support Prep (Mixing/Crosslink)": 0.10,
+        "Zr Step (Heating 50°C)": 0.15,
+        "Linker Step (Heating 50°C)": 0.15,
+        "Washing & Centrifugation": 0.10,
+        "Freeze Drying (Final)": 0.50
+    }
+}
 
 # -----------------------------------------------------------------------------
 # AI HELPER FUNCTION
@@ -110,6 +134,41 @@ def reset_data():
 # Initialize Session State
 if "ef_df" not in st.session_state:
     reset_data()
+
+# -----------------------------------------------------------------------------
+# HEADER & LOGOS
+# -----------------------------------------------------------------------------
+# Layout: Left (UBC), Center (AME), Right (COV)
+col_head1, col_head2, col_head3 = st.columns([1, 2, 1])
+
+def load_logo(filename):
+    path = LOGO_DIR / filename
+    if path.exists():
+        return str(path)
+    return None
+
+with col_head1:
+    # Left: UBC
+    logo_ubc = load_logo("ubc.png")
+    if logo_ubc: st.image(logo_ubc, width=150)
+    else: st.caption("UBC Logo")
+
+with col_head2:
+    # Center: AME
+    logo_ame = load_logo("ame.png")
+    if logo_ame: 
+        # Use columns inside to center perfectly if needed, or simple st.image
+        st.image(logo_ame, width=200) 
+    else: 
+        st.caption("AME Logo")
+
+with col_head3:
+    # Right: COV
+    logo_cov = load_logo("cov.png")
+    if logo_cov: st.image(logo_cov, width=150)
+    else: st.caption("Coventry Logo")
+
+st.markdown("---")
 
 # -----------------------------------------------------------------------------
 # SIDEBAR: USER INPUTS
@@ -266,24 +325,90 @@ def calculate_impacts(route_id, ef_df, routes_df, efficiency_factor=1.0, recycli
     return results, pd.DataFrame(contributions)
 
 # -----------------------------------------------------------------------------
-# PLOTTING
+# PLOTTING FUNCTIONS
 # -----------------------------------------------------------------------------
-def plot_sankey_diagram(results_list):
-    target_res = next((r for r in results_list if r["id"] == ID_MOF), results_list[0])
-    elec_gwp = target_res["Electricity GWP"]
-    chem_gwp = target_res["Non-Electric GWP"]
-    total_gwp = target_res["Total GWP"]
+def plot_sankey_diagram_dual(results_list):
+    """Generates two Sankey diagrams (one for Ref, one for MOF) stacked."""
+    figures = []
     
-    labels = ["Electricity Source", "Chemical Supply", "Lab Synthesis", "Total GWP"]
-    colors = ["#FFD700", "#90EE90", "#87CEFA", "#FF6347"]
+    for res in results_list:
+        elec_gwp = res["Electricity GWP"]
+        chem_gwp = res["Non-Electric GWP"]
+        total_gwp = res["Total GWP"]
+        
+        # Determine Color Scheme based on ID
+        if res["id"] == ID_REF:
+            node_colors = ["#A9A9A9", "#D3D3D3", "#87CEFA", "#4682B4"] # Blues/Greys for Ref
+            link_colors = ["rgba(169, 169, 169, 0.4)", "rgba(211, 211, 211, 0.4)", "rgba(135, 206, 250, 0.4)"]
+        else:
+            node_colors = ["#FFD700", "#90EE90", "#FF7F50", "#CD5C5C"] # Warmer/MOF colors
+            link_colors = ["rgba(255, 215, 0, 0.4)", "rgba(144, 238, 144, 0.4)", "rgba(255, 127, 80, 0.4)"]
+
+        labels = ["Electricity Source", "Chemical Supply", "Synthesis Process", "Total GWP"]
+        
+        fig = go.Figure(data=[go.Sankey(
+            node = dict(pad=15, thickness=20, line=dict(color="black", width=0.5), label=labels, color=node_colors),
+            link = dict(source=[0, 1, 2], target=[2, 2, 3], value=[elec_gwp, chem_gwp, total_gwp], 
+                        color=link_colors)
+          )])
+        fig.update_layout(title_text=f"Impact Flow: {res['name']}", font_size=12, height=350)
+        figures.append(fig)
+        
+    return figures
+
+def plot_electricity_breakdown(results_list):
+    """Generates a bar chart showing kWh demand per process step."""
+    breakdown_data = []
     
-    fig = go.Figure(data=[go.Sankey(
-        node = dict(pad=15, thickness=20, line=dict(color="black", width=0.5), label=labels, color=colors),
-        link = dict(source=[0, 1, 2], target=[2, 2, 3], value=[elec_gwp, chem_gwp, total_gwp], 
-                    color=["rgba(255, 215, 0, 0.4)", "rgba(144, 238, 144, 0.4)", "rgba(135, 206, 250, 0.4)"])
-      )])
-    fig.update_layout(title_text=f"Impact Flow: {target_res['name']}", font_size=10, height=400)
+    for res in results_list:
+        rid = res["id"]
+        total_kwh = res["Electricity kWh"]
+        
+        # Get specific steps from the hardcoded dictionary
+        steps = PROCESS_BREAKDOWN.get(rid, {"General Process": 1.0})
+        
+        for step_name, fraction in steps.items():
+            kwh_step = total_kwh * fraction
+            breakdown_data.append({
+                "Bead": res["name"],
+                "Process Step": step_name,
+                "Electricity Demand (kWh/kg)": kwh_step
+            })
+            
+    df_elec = pd.DataFrame(breakdown_data)
+    fig = px.bar(
+        df_elec, 
+        x="Bead", 
+        y="Electricity Demand (kWh/kg)", 
+        color="Process Step",
+        title="Electricity Demand per Process Step",
+        text_auto='.1f'
+    )
     return fig
+
+def plot_system_boundary():
+    """Creates a Graphviz diagram for the system boundary."""
+    dot = graphviz.Digraph()
+    dot.attr(rankdir='LR', size='8,5')
+    dot.attr('node', shape='box', style='filled', color='lightblue')
+    
+    with dot.subgraph(name='cluster_0') as c:
+        c.attr(label='Cradle-to-Gate System Boundary')
+        c.attr(color='black')
+        c.node('Raw Materials', 'Raw Material Extraction\n(Chitin, Zr, Linkers)')
+        c.node('Transport', 'Transport to Lab')
+        c.node('Synthesis', 'Bead Synthesis\n(Mixing, Crosslinking, Drying)')
+        
+        c.edge('Raw Materials', 'Transport')
+        c.edge('Transport', 'Synthesis')
+        
+    dot.node('Output', 'Final Dry Bead (1 kg)', shape='oval', color='lightgreen')
+    dot.edge('Synthesis', 'Output')
+    
+    dot.node('Electricity', 'Grid Electricity', shape='ellipse', color='yellow')
+    dot.edge('Electricity', 'Synthesis', style='dashed')
+    
+    return dot
 
 # -----------------------------------------------------------------------------
 # MAIN APP
@@ -291,7 +416,7 @@ def plot_sankey_diagram(results_list):
 def main():
     st.title("Interactive LCA Explorer: Ref-Bead vs U@Bead")
     st.markdown("""
-    **Dashboard:** Adjust scenarios on the left. Use the tabs below to explore Results, Sensitivity, and AI Insights.
+    **Dashboard:** Adjust scenarios on the left. Explore results, sensitivity, and AI insights below.
     """)
 
     # --- CALCULATION ---
@@ -325,10 +450,12 @@ def main():
     sum_df = pd.DataFrame(summary_rows)
 
     # --- TABS ---
-    tab1, tab2, tab3, tab4, tab5 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
         "📊 LCA Results", 
-        "📈 Sensitivity Analysis", 
-        "📦 Inventory", 
+        "⚡ Electricity Breakdown",
+        "🌊 Impact Flow", 
+        "📈 Scaling Analysis", 
+        "🌐 System Boundary",
         "📚 Literature", 
         "🤖 AI Insights"
     ])
@@ -346,35 +473,89 @@ def main():
             st.plotly_chart(fig_log, use_container_width=True)
 
         with col2:
-            st.subheader("Impact Contribution")
-            stack_data = []
-            for r in results_list:
-                stack_data.append({"Bead": r["name"], "Source": "Electricity", "GWP": r["Electricity GWP"]})
-                stack_data.append({"Bead": r["name"], "Source": "Chemicals", "GWP": r["Non-Electric GWP"]})
-            fig_stack = px.bar(pd.DataFrame(stack_data), x="Bead", y="GWP", color="Source", 
-                               title="Electricity vs Chemicals Breakdown", text_auto='.2s')
-            st.plotly_chart(fig_stack, use_container_width=True)
-            
-        st.subheader("Performance Normalized (FU2)")
-        fig_fu2 = px.bar(sum_df, x="Bead", y="GWP per g Cu", color="Bead", title="GWP per g Copper Removed", text_auto='.2f')
-        st.plotly_chart(fig_fu2, use_container_width=True)
+            st.subheader("Performance Normalized (FU2)")
+            fig_fu2 = px.bar(sum_df, x="Bead", y="GWP per g Cu", color="Bead", title="GWP per g Copper Removed", text_auto='.2f')
+            st.plotly_chart(fig_fu2, use_container_width=True)
 
-    # --- TAB 2: SENSITIVITY ---
+    # --- TAB 2: ELECTRICITY BREAKDOWN ---
     with tab2:
-        st.header("Sensitivity Analysis")
+        st.header("Process Energy Analysis")
+        st.markdown("Detailed breakdown of electricity consumption per synthesis step.")
+        fig_elec_break = plot_electricity_breakdown(results_list)
+        st.plotly_chart(fig_elec_break, use_container_width=True)
+
+    # --- TAB 3: IMPACT FLOW ---
+    with tab3:
+        st.header("Impact Flow (Sankey Diagrams)")
+        sankey_figs = plot_sankey_diagram_dual(results_list)
         
-        # 1. Interactive Grid Analysis
-        st.subheader("1. Grid Intensity Sensitivity")
+        col_san1, col_san2 = st.columns(2)
+        if len(sankey_figs) > 0:
+            with col_san1: st.plotly_chart(sankey_figs[0], use_container_width=True)
+        if len(sankey_figs) > 1:
+            with col_san2: st.plotly_chart(sankey_figs[1], use_container_width=True)
+            
+        st.divider()
+        st.subheader("Mass Inventory")
+        all_contribs = []
+        for i, df in enumerate(dfs_list):
+            df["Bead"] = results_list[i]["name"]
+            all_contribs.append(df)
+        df_all = pd.concat(all_contribs) if all_contribs else pd.DataFrame()
         
-        col_s1, col_s2 = st.columns([1, 2])
-        with col_s1:
-            st.write("Add Custom Grid:")
-            new_grid_name = st.text_input("Name", "My Local Grid")
-            new_grid_val = st.number_input("Intensity (kg CO2/kWh)", 0.0, 1.0, 0.45)
-            if st.button("Add to Chart"):
-                st.session_state["custom_grids"][new_grid_name] = new_grid_val
-                st.success(f"Added {new_grid_name}")
+        df_ne = df_all[df_all["Category"] != "Electricity"]
+        fig_mass = px.bar(df_ne, x="Component", y="Mass (kg)", color="Component", 
+                          facet_col="Bead", title="Mass Input per kg Product")
+        st.plotly_chart(fig_mass, use_container_width=True)
+
+    # --- TAB 4: SCALING & SENSITIVITY ---
+    with tab4:
+        st.header("Scaling & Sensitivity")
         
+        # 1. Batch Scaling (Corrected to 100kg, Power Law)
+        st.subheader("1. Batch Size Scaling Projection")
+        st.markdown("Projected reduction in GWP as production scales from Lab (g) to Pilot (kg).")
+        
+        # Range from 0.001 kg (1g) to 100 kg
+        batch_sizes = np.logspace(np.log10(0.0005), np.log10(100), num=20)
+        ref_lab_batch = 0.0005 # 0.5g lab batch
+        scaling_exponent = 0.6 # Typical rule of thumb for equipment scaling (0.6 power rule)
+        
+        scale_rows = []
+        for rid in unique_routes:
+            base_res, _ = calculate_impacts(rid, EF_DF, ROUTES_DF, 1.0, 0.0)
+            base_elec_total = base_res["Electricity kWh"]
+            base_chem_gwp = base_res["Non-Electric GWP"]
+            elec_ef = base_res["Electricity EF Used"]
+            
+            for b_size in batch_sizes:
+                # Scale Factor Calculation: Energy/kg decreases as batch size increases
+                # E_spec_new = E_spec_lab * (Batch_new / Batch_lab)^(p - 1)
+                # If p=0.6, exponent is -0.4
+                scale_factor = (b_size / ref_lab_batch) ** (scaling_exponent - 1)
+                
+                # Apply scaling only to electricity (Chemicals remain roughly linear per kg)
+                new_elec_spec = base_elec_total * scale_factor
+                
+                # Floor the electricity scaling (cannot go to zero, assume industrial efficiency limit ~5% of lab)
+                min_limit = base_elec_total * 0.05 
+                new_elec_spec = max(new_elec_spec, min_limit)
+                
+                new_gwp = (new_elec_spec * elec_ef) + base_chem_gwp
+                
+                scale_rows.append({"Batch Size (kg)": b_size, "Bead": base_res["name"], "Estimated GWP": new_gwp})
+                
+        fig_scale = px.line(pd.DataFrame(scale_rows), x="Batch Size (kg)", y="Estimated GWP", color="Bead", 
+                            log_x=True, log_y=True, title="Projected GWP vs Batch Size (Power Law Model)")
+        
+        # Add Industrial Target Zone
+        fig_scale.add_vrect(x0=10.0, x1=100.0, fillcolor="green", opacity=0.1, annotation_text="Pilot/Ind. Scale")
+        st.plotly_chart(fig_scale, use_container_width=True)
+
+        st.divider()
+
+        # 2. Grid Sensitivity
+        st.subheader("2. Grid Intensity Sensitivity")
         # Calculate for all grids
         sens_rows = []
         for g_name, g_val in st.session_state["custom_grids"].items():
@@ -391,73 +572,22 @@ def main():
         
         df_sens = pd.DataFrame(sens_rows).sort_values("Grid Value")
         fig_sens = px.line(df_sens, x="Grid", y="Total GWP", color="Bead", markers=True, 
-                           title="Total GWP vs Grid Carbon Intensity",
-                           hover_data=["Grid Value"])
+                           title="Total GWP vs Grid Carbon Intensity")
         st.plotly_chart(fig_sens, use_container_width=True)
+
+    # --- TAB 5: SYSTEM BOUNDARY ---
+    with tab5:
+        st.header("System Boundary")
+        st.markdown("Visual representation of the Cradle-to-Gate Life Cycle Assessment scope.")
         
-        st.divider()
-        
-        # 2. Scaling Analysis
-        st.subheader("2. Batch Scaling Effect")
-        ref_batch_kg = st.slider("Reference Lab Batch Size (kg)", 0.0001, 0.0100, 0.0005, step=0.0001, 
-                                 help="The actual batch size used in the lab experiment (e.g. 0.5g = 0.0005kg).")
-        
-        batch_sizes = [0.0005, 0.001, 0.01, 0.1, 1.0, 10.0]
-        scale_rows = []
-        for rid in unique_routes:
-            base_res, _ = calculate_impacts(rid, EF_DF, ROUTES_DF, 1.0, 0.0)
-            base_elec = base_res["Electricity kWh"]
-            
-            for b_size in batch_sizes:
-                scale_factor = ref_batch_kg / b_size
-                new_elec = base_elec * (0.1 + 0.9 * scale_factor) # Model
-                new_gwp = (new_elec * base_res["Electricity EF Used"]) + base_res["Non-Electric GWP"]
-                scale_rows.append({"Batch Size (kg)": b_size, "Bead": base_res["name"], "Estimated GWP": new_gwp})
-                
-        fig_scale = px.line(pd.DataFrame(scale_rows), x="Batch Size (kg)", y="Estimated GWP", color="Bead", 
-                            log_x=True, log_y=True, title="Projected GWP vs Batch Size (Log-Log Scale)")
-        
-        # Add Industrial Target Zone
-        fig_scale.add_vrect(x0=1.0, x1=10.0, fillcolor="green", opacity=0.1, annotation_text="Industrial Target")
-        st.plotly_chart(fig_scale, use_container_width=True)
+        try:
+            diag = plot_system_boundary()
+            st.graphviz_chart(diag)
+        except Exception as e:
+            st.error(f"Could not render diagram (Graphviz missing?): {e}")
 
-    # --- TAB 3: INVENTORY ---
-    with tab3:
-        st.header("Inventory Breakdown")
-        
-        all_contribs = []
-        for i, df in enumerate(dfs_list):
-            df["Bead"] = results_list[i]["name"]
-            all_contribs.append(df)
-        df_all = pd.concat(all_contribs) if all_contribs else pd.DataFrame()
-
-        if not df_all.empty:
-            st.subheader("A. Chemical Impacts")
-            df_ne = df_all[df_all["Category"] != "Electricity"]
-            fig_ne = px.bar(df_ne, x="Bead", y="GWP", color="Component", title="Chemical GWP (No Elec)", barmode="group")
-            st.plotly_chart(fig_ne, use_container_width=True)
-
-            st.divider()
-
-            st.subheader("B. Total Breakdown (Log Scale)")
-            fig_breakdown = px.bar(df_all, x="Bead", y="GWP", color="Component", 
-                                   title="Total GWP Breakdown (Log Scale)", 
-                                   barmode="group", log_y=True)
-            st.plotly_chart(fig_breakdown, use_container_width=True)
-
-            st.divider()
-
-            st.subheader("C. Mass Inventory")
-            fig_mass = px.bar(df_ne, x="Component", y="Mass (kg)", color="Component", 
-                              facet_col="Bead", title="Mass Input per kg Product")
-            fig_mass.update_yaxes(matches=None, showticklabels=True)
-            st.plotly_chart(fig_mass, use_container_width=True)
-        
-        st.subheader("D. Impact Flow")
-        st.plotly_chart(plot_sankey_diagram(results_list), use_container_width=True)
-
-    # --- TAB 4: LITERATURE ---
-    with tab4:
+    # --- TAB 6: LITERATURE ---
+    with tab6:
         st.header("Literature Comparison")
         current_data = []
         for r in results_list:
@@ -472,34 +602,39 @@ def main():
                          log_y=True, title="GWP Comparison (Log Scale)", text="Source")
         st.plotly_chart(fig_lit, use_container_width=True)
 
-    # --- TAB 5: AI INSIGHTS ---
-    with tab5:
+    # --- TAB 7: AI INSIGHTS ---
+    with tab7:
         st.header("🤖 AI Insights")
-        st.caption("Ask questions about the current results displayed in the dashboard.")
+        st.markdown("Ask detailed questions about the LCA results, hotspots, or optimization strategies.")
         
-        col_q1, col_q2 = st.columns([1, 3])
+        # Quick Chips/Buttons (No Dropdown)
+        st.write("Suggested Questions:")
+        col_btn1, col_btn2, col_btn3 = st.columns(3)
+        q_clicked = None
         
-        with col_q1:
-            preset_q = st.selectbox(
-                "Quick Questions", 
-                ["(Select One)",
-                 "Why is the GWP so high compared to literature?",
-                 "Compare Ref-Bead and U@Bead results.",
-                 "What is the biggest hotspot?",
-                 "How can I reduce the carbon footprint?"]
-            )
+        if col_btn1.button("🔥 Identify Hotspots"): q_clicked = "What are the major environmental hotspots in these beads?"
+        if col_btn2.button("🏭 Scale-up Advice"): q_clicked = "How can we reduce the impact during industrial scale-up?"
+        if col_btn3.button("🆚 Compare Beads"): q_clicked = "Compare the Ref-Bead and U@Bead in terms of efficiency."
+
+        # Text Input
+        user_text = st.text_area("Or type your own question here:", height=100)
         
-        with col_q2:
-            custom_q = st.text_input("Or type your own question:")
+        final_q = user_text if user_text else q_clicked
         
-        final_q = custom_q if custom_q else (preset_q if preset_q != "(Select One)" else "")
+        # Context Selection
+        context_opt = st.radio("Focus Answer On:", ["Both Beads", "Ref-Bead Only", "MOF Bead Only"], horizontal=True)
         
-        if st.button("Analyze Results"):
+        if st.button("Analyze with AI", type="primary"):
             if final_q:
-                with st.spinner("AI is analyzing your data..."):
-                    answer = get_ai_insight(results_list, final_q)
-                    st.markdown("### AI Analysis")
-                    st.info(answer)
+                # Filter context based on selection
+                context_data = results_list
+                if context_opt == "Ref-Bead Only": context_data = [r for r in results_list if r['id'] == ID_REF]
+                if context_opt == "MOF Bead Only": context_data = [r for r in results_list if r['id'] == ID_MOF]
+
+                with st.spinner("AI is analyzing data..."):
+                    answer = get_ai_insight(context_data, final_q)
+                    st.markdown("### 💡 AI Response")
+                    st.success(answer)
             else:
                 st.warning("Please select or type a question.")
 
