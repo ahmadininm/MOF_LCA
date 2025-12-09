@@ -168,7 +168,7 @@ def main():
 
     st.title("Screening LCA: Ref-Bead vs U@Bead")
     st.markdown("""
-    [cite_start]**Data Source:** All calculations are strictly derived from the *Supplementary Information* calculations provided in the text [cite: 114-286].
+    **Data Source:** All calculations are strictly derived from the *Supplementary Information* calculations provided in the text [cite: 114-286].
     
     **Scope:** Gate-to-gate screening LCA focused on laboratory synthesis conditions.
     """)
@@ -246,7 +246,7 @@ def main():
         fig_ne = px.bar(df_ne, x="Bead", y="GWP (kg CO2e)", color="Component", 
                         title="Chemical Impacts Only (Excluding Electricity)", barmode="group")
         st.plotly_chart(fig_ne, use_container_width=True)
-        [cite_start]st.caption("Shows the additional burden of MOF reagents (Ethanol, Formic, ZrCl4)[cite: 89].")
+        st.caption("Shows the additional burden of MOF reagents (Ethanol, Formic, ZrCl4).")
 
     # -------------------------------------------------------------------------
     # TAB 2: INVENTORY
@@ -296,7 +296,7 @@ def main():
                          log_y=True, title="GWP Comparison (Log Scale)",
                          color_discrete_map={"This Work": "red", "Literature": "blue"})
         st.plotly_chart(fig_lit, use_container_width=True)
-        [cite_start]st.caption("Note: 'This Work' values are high due to unscaled lab electricity allocation[cite: 109].")
+        [cite_start]st.caption("Note: 'This Work' values are high due to unscaled lab electricity allocation[cite: 111].")
 
 if __name__ == "__main__":
     main()
