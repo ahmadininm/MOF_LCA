@@ -156,7 +156,7 @@ def main():
 
     st.title("Screening LCA: Ref-Bead vs U@Bead")
     st.markdown("""
-    **Data Source:** All calculations are strictly derived from the *Supplementary Information* calculations provided in the uploaded text .
+    [cite_start]**Data Source:** All calculations are strictly derived from the *Supplementary Information* calculations provided in the uploaded text [cite: 114-286].
     
     **Scope:** Gate-to-gate screening LCA focused on laboratory synthesis conditions.
     """)
@@ -202,7 +202,7 @@ def main():
             ])
             fig_fu1 = px.bar(df_fu1, x="Bead", y="GWP", color="Bead", title="Total GWP per kg Bead", barmode="group")
             st.plotly_chart(fig_fu1, use_container_width=True)
-            st.caption("Dominated by electricity (~99%)[cite: 90].")
+            st.caption("Dominated by electricity (~99%).")
 
         with col2:
             st.subheader("2. Performance Normalized (FU2)")
@@ -213,7 +213,7 @@ def main():
             ])
             fig_fu2 = px.bar(df_fu2, x="Bead", y="GWP", color="Bead", title="GWP per g Cu Removed", barmode="group")
             st.plotly_chart(fig_fu2, use_container_width=True)
-            st.caption("Gap narrows due to higher capacity of MOF bead (116 vs 77 mg/g)[cite: 93].")
+            st.caption("Gap narrows due to higher capacity of MOF bead (116 vs 77 mg/g).")
 
         st.divider()
         st.subheader("3. Non-Electric Impacts (Chemicals Only)")
@@ -230,7 +230,7 @@ def main():
         fig_ne = px.bar(df_ne, x="Bead", y="GWP (kg CO2e)", color="Component", 
                         title="Chemical Impacts Only (Excluding Electricity)", barmode="group")
         st.plotly_chart(fig_ne, use_container_width=True)
-        st.caption("Shows the additional burden of MOF reagents (Ethanol, Formic, ZrCl4)[cite: 89].")
+        st.caption("Shows the additional burden of MOF reagents (Ethanol, Formic, ZrCl4).")
 
     # -------------------------------------------------------------------------
     # TAB 2: INVENTORY
@@ -257,7 +257,7 @@ def main():
         ]
         fig_elec = px.bar(pd.DataFrame(elec_data), y="Step", x="kWh", color="Step", orientation='h', facet_col="Bead", title="Electricity Consumption by Step")
         st.plotly_chart(fig_elec, use_container_width=True)
-        st.caption("Freeze drying is the primary hotspot[cite: 59, 64].")
+        st.caption("Freeze drying is the primary hotspot.")
         
         st.subheader("System Boundary")
         st.plotly_chart(plot_system_boundary(), use_container_width=True)
@@ -280,7 +280,7 @@ def main():
                          log_y=True, title="GWP Comparison (Log Scale)",
                          color_discrete_map={"This Work": "red", "Literature": "blue"})
         st.plotly_chart(fig_lit, use_container_width=True)
-        st.caption("Note: 'This Work' values are high due to unscaled lab electricity allocation[cite: 87, 110].")
+        st.caption("Note: 'This Work' values are high due to unscaled lab electricity allocation.")
 
 if __name__ == "__main__":
     main()
