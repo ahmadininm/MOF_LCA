@@ -31,8 +31,6 @@ st.set_page_config(page_title="LCA Explorer: Interactive & AI-Enhanced", layout=
 def render_header():
     col1, col2, col3 = st.columns([1, 1, 1])
     
-    # Placeholders for logos - assuming they exist in DATA_DIR
-    # You need to ensure ubc.png, ame.png, cov.png are in the 'data' folder
     with col1:
         if (DATA_DIR / "ubc.png").exists():
             st.image(str(DATA_DIR / "ubc.png"), width=150)
@@ -143,7 +141,7 @@ with st.sidebar:
     st.header("Control Panel")
     if st.button("🔄 Reset Defaults"):
         reset_data()
-        st.experimental_rerun()
+        st.rerun()
 
     st.divider()
     st.subheader("1. Scenario Parameters")
@@ -236,11 +234,17 @@ def calculate_impacts(route_id, ef_df, routes_df, dry_time_h, solvent_factor, re
     if trans_gwp > 0:
         contributions.append({"Component": "Transport", "Category": "Logistics", "Mass (kg)": 0.0, "GWP": trans_gwp})
 
+    total_gwp = gwp_elec + total_reagent_gwp + trans_gwp
+    
     return {
-        "id": route_id, "name": route_data.iloc[0]["route_name"],
-        "Total GWP": gwp_elec + total_reagent_gwp + trans_gwp,
-        "Electricity GWP": gwp_elec, "Non-Electric GWP": total_reagent_gwp + trans_gwp,
-        "Electricity %": (gwp_elec / (gwp_elec + total_reagent_gwp + trans_gwp)) * 100
+        "id": route_id, 
+        "name": route_data.iloc[0]["route_name"],
+        "Total GWP": total_gwp,
+        "Electricity GWP": gwp_elec, 
+        "Non-Electric GWP": total_reagent_gwp + trans_gwp,
+        "Electricity kWh": elec_kwh,          # <--- FIXED: Included in return dict
+        "Electricity EF Used": ef_elec,       # <--- FIXED: Included in return dict
+        "Electricity %": (gwp_elec / total_gwp) * 100 if total_gwp > 0 else 0
     }, pd.DataFrame(contributions)
 
 # -----------------------------------------------------------------------------
@@ -370,7 +374,8 @@ def main():
             temp_ef.loc[temp_ef["reagent_name"].str.contains("Electricity"), "GWP_kgCO2_per_kg"] = g_val
             for rid in unique_routes:
                 r, _ = calculate_impacts(rid, temp_ef, ROUTES_DF, dry_time, solvent_vol_factor, recycle_rate, yield_rate, transport_overhead)
-                sens_rows.append({"Grid": g_name, "Grid Val": g_val, "Bead": r["name"], "Total GWP": r["Total GWP"]})
+                if r:
+                    sens_rows.append({"Grid": g_name, "Grid Val": g_val, "Bead": r["name"], "Total GWP": r["Total GWP"]})
         
         st.plotly_chart(px.line(pd.DataFrame(sens_rows).sort_values("Grid Val"), x="Grid", y="Total GWP", color="Bead", markers=True, title="GWP vs Grid Intensity"), use_container_width=True)
 
@@ -384,17 +389,15 @@ def main():
         
         for rid in unique_routes:
             base_res, _ = calculate_impacts(rid, EF_DF, ROUTES_DF, dry_time, solvent_vol_factor, recycle_rate, yield_rate, 0)
-            base_elec = base_res["Electricity kWh"] # This is the HIGH per-kg value from lab
-            
-            for b_size in batch_sizes:
-                # Model: Variable energy (10%) stays constant per kg. Fixed overhead (90%) dilutes.
-                # Factor = 0.1 + 0.9 * (RefBatch / NewBatch)
-                # Since RefBatch is tiny (0.0005) and NewBatch is huge (1+), this factor drops to ~0.1 quickly.
-                scale_factor = 0.1 + 0.9 * (ref_batch_kg / b_size)
+            if base_res:
+                base_elec = base_res["Electricity kWh"] # This is the HIGH per-kg value from lab
                 
-                new_elec = base_elec * scale_factor
-                new_gwp = (new_elec * base_res["Electricity EF Used"]) + base_res["Non-Electric GWP"]
-                scale_rows.append({"Batch Size (kg)": b_size, "Bead": base_res["name"], "Estimated GWP": new_gwp})
+                for b_size in batch_sizes:
+                    # Model: Variable energy (10%) stays constant per kg. Fixed overhead (90%) dilutes.
+                    scale_factor = 0.1 + 0.9 * (ref_batch_kg / b_size)
+                    new_elec = base_elec * scale_factor
+                    new_gwp = (new_elec * base_res["Electricity EF Used"]) + base_res["Non-Electric GWP"]
+                    scale_rows.append({"Batch Size (kg)": b_size, "Bead": base_res["name"], "Estimated GWP": new_gwp})
                 
         fig_scale = px.line(pd.DataFrame(scale_rows), x="Batch Size (kg)", y="Estimated GWP", color="Bead", 
                             title="Projected GWP Scaling (1-100 kg)", log_y=True)
