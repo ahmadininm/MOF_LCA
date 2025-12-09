@@ -79,44 +79,113 @@ def load_default_data():
         read_safe(DATA_DIR / "literature.csv")
     )
 
-# Initialize Session State with defaults if empty
-if "ef_df" not in st.session_state:
+def reset_data():
+    """Resets session state to default CSV values."""
     ef, routes, perf, lit = load_default_data()
     st.session_state["ef_df"] = ef
     st.session_state["routes_df"] = routes
     st.session_state["perf_df"] = perf
     st.session_state["lit_df"] = lit
+    st.session_state["reset_trigger"] = False
+
+# Initialize Session State
+if "ef_df" not in st.session_state:
+    reset_data()
 
 # -----------------------------------------------------------------------------
-# SIDEBAR: DATA EDITOR & AI
+# SIDEBAR: USER INPUTS
 # -----------------------------------------------------------------------------
 with st.sidebar:
-    st.header("1. Customize Inputs")
-    st.caption("Double-click cells to edit data.")
+    st.header("Control Panel")
     
-    with st.expander("Emission Factors (EF)", expanded=False):
-        st.session_state["ef_df"] = st.data_editor(
-            st.session_state["ef_df"], num_rows="dynamic", key="editor_ef"
-        )
-        
-    with st.expander("Route Definitions (Recipe)", expanded=False):
-        st.session_state["routes_df"] = st.data_editor(
-            st.session_state["routes_df"], num_rows="dynamic", key="editor_routes"
-        )
-        
-    with st.expander("Performance (Adsorption)", expanded=False):
-        st.session_state["perf_df"] = st.data_editor(
-            st.session_state["perf_df"], num_rows="dynamic", key="editor_perf"
-        )
+    if st.button("🔄 Reset to Defaults"):
+        reset_data()
+        st.success("Data reset!")
+        st.rerun()
 
     st.divider()
-    st.header("2. AI Assistant")
+    
+    # --- QUICK ADJUST (Sliders) ---
+    st.subheader("1. Quick Adjustments")
+    st.caption("Easily modify key parameters without editing tables.")
+    
+    # 1. Grid Intensity
+    current_grid_ef = float(st.session_state["ef_df"].loc[
+        st.session_state["ef_df"]["reagent_name"] == "Electricity (Canada)", 
+        "GWP_kgCO2_per_kg"
+    ].iloc[0])
+    
+    new_grid_ef = st.slider(
+        "Grid Intensity (kg CO2/kWh)", 
+        min_value=0.0, max_value=1.0, 
+        value=current_grid_ef, 
+        step=0.01,
+        help="0.12 = Canada, 0.38 = US, 0.58 = China"
+    )
+    
+    # Update Grid EF in Dataframe if changed
+    if new_grid_ef != current_grid_ef:
+        st.session_state["ef_df"].loc[
+            st.session_state["ef_df"]["reagent_name"] == "Electricity (Canada)", 
+            "GWP_kgCO2_per_kg"
+        ] = new_grid_ef
+
+    # 2. Electricity Usage (Route 1: Ref)
+    current_ref_elec = float(st.session_state["routes_df"].loc[
+        st.session_state["routes_df"]["route_id"] == ID_REF, 
+        "electricity_kwh_per_fu"
+    ].iloc[0])
+    
+    new_ref_elec = st.number_input(
+        "Ref-Bead Electricity (kWh/kg)",
+        min_value=0.0, value=current_ref_elec, step=1000.0
+    )
+    
+    if new_ref_elec != current_ref_elec:
+        st.session_state["routes_df"].loc[
+            st.session_state["routes_df"]["route_id"] == ID_REF, 
+            "electricity_kwh_per_fu"
+        ] = new_ref_elec
+        
+    # 3. Electricity Usage (Route 2: MOF)
+    current_mof_elec = float(st.session_state["routes_df"].loc[
+        st.session_state["routes_df"]["route_id"] == ID_MOF, 
+        "electricity_kwh_per_fu"
+    ].iloc[0])
+    
+    new_mof_elec = st.number_input(
+        "U@Bead Electricity (kWh/kg)",
+        min_value=0.0, value=current_mof_elec, step=1000.0
+    )
+    
+    if new_mof_elec != current_mof_elec:
+        st.session_state["routes_df"].loc[
+            st.session_state["routes_df"]["route_id"] == ID_MOF, 
+            "electricity_kwh_per_fu"
+        ] = new_mof_elec
+
+    st.divider()
+
+    # --- ADVANCED EDIT (Tables) ---
+    st.subheader("2. Detailed Tables")
+    with st.expander("Edit Reagents & Factors"):
+        st.write("**Emission Factors**")
+        st.session_state["ef_df"] = st.data_editor(st.session_state["ef_df"], key="ed_ef", num_rows="dynamic")
+        
+        st.write("**Route Recipes**")
+        st.session_state["routes_df"] = st.data_editor(st.session_state["routes_df"], key="ed_routes", num_rows="dynamic")
+        
+        st.write("**Performance Stats**")
+        st.session_state["perf_df"] = st.data_editor(st.session_state["perf_df"], key="ed_perf", num_rows="dynamic")
+
+    st.divider()
+    st.subheader("3. AI Assistant")
     ai_query = st.text_input("Ask for data (e.g., 'GWP of acetone')")
     if st.button("Ask AI"):
         with st.spinner("Consulting AI..."):
             st.info(get_ai_suggestion(ai_query))
 
-# Shortcuts for easier access in main code
+# Shortcuts
 EF_DF = st.session_state["ef_df"]
 ROUTES_DF = st.session_state["routes_df"]
 PERF_DF = st.session_state["perf_df"]
@@ -125,28 +194,20 @@ LIT_DF = st.session_state["lit_df"]
 # -----------------------------------------------------------------------------
 # CALCULATION ENGINE
 # -----------------------------------------------------------------------------
-def calculate_impacts(route_id, ef_df, routes_df, grid_override_val=None):
-    """
-    Calculates GWP. Allows overriding grid intensity for sensitivity analysis.
-    """
-    # Filter for the specific route
+def calculate_impacts(route_id, ef_df, routes_df):
+    """Calculates GWP based on current session state data."""
     route_data = routes_df[routes_df["route_id"] == route_id].copy()
     if route_data.empty: return None, None
 
-    # Get Electricity Info
+    # Electricity
     elec_kwh = float(route_data.iloc[0]["electricity_kwh_per_fu"])
     elec_source = route_data.iloc[0]["electricity_source"]
     
-    # Determine EF for Electricity
-    if grid_override_val is not None:
-        ef_elec = grid_override_val
-    else:
-        ef_elec_row = ef_df[ef_df["reagent_name"] == elec_source]
-        ef_elec = float(ef_elec_row["GWP_kgCO2_per_kg"].iloc[0]) if not ef_elec_row.empty else 0.0
-    
+    ef_elec_row = ef_df[ef_df["reagent_name"] == elec_source]
+    ef_elec = float(ef_elec_row["GWP_kgCO2_per_kg"].iloc[0]) if not ef_elec_row.empty else 0.0
     gwp_elec = elec_kwh * ef_elec
 
-    # Calculate Reagent GWP
+    # Reagents
     contributions = [{"Component": "Electricity", "Category": "Electricity", "Mass (kg)": 0.0, "GWP": gwp_elec}]
     total_reagent_gwp = 0.0
 
@@ -156,11 +217,9 @@ def calculate_impacts(route_id, ef_df, routes_df, grid_override_val=None):
         
         ef_row = ef_df[ef_df["reagent_name"] == reagent]
         ef_val = float(ef_row["GWP_kgCO2_per_kg"].iloc[0]) if not ef_row.empty else 0.0
-        
         gwp_val = mass * ef_val
         total_reagent_gwp += gwp_val
         
-        # Categorize
         if reagent in ["Chitosan", "PDChNF"]: cat = "Polymers"
         elif reagent in ["Zirconium tetrachloride", "2-Aminoterephthalic acid", "Formic acid (88%)", "Ethanol"]: cat = "MOF Reagents"
         else: cat = "Solvents/Other"
@@ -181,7 +240,7 @@ def calculate_impacts(route_id, ef_df, routes_df, grid_override_val=None):
     return results, pd.DataFrame(contributions)
 
 # -----------------------------------------------------------------------------
-# PLOTTING FUNCTIONS
+# PLOTTING
 # -----------------------------------------------------------------------------
 def plot_system_boundary():
     fig = go.Figure()
@@ -210,15 +269,12 @@ def plot_system_boundary():
 def main():
     st.title("Interactive LCA Explorer: Ref-Bead vs U@Bead")
     st.markdown("""
-    **Overview:** This tool implements the screening LCA from the paper. 
-    **Customization:** Use the sidebar to edit emission factors or recipes for your own study.
+    **Overview:** Use the **Control Panel** on the left to adjust grid intensity and electricity usage interactively.
+    Results will update automatically.
     """)
 
-    # 1. BASE CALCULATION
-    # -------------------
-    # Filter Routes based on what exists in the routes dataframe (dynamic handling)
+    # --- CALCULATION LOOP ---
     unique_routes = ROUTES_DF["route_id"].unique()
-    
     results_list = []
     dfs_list = []
     
@@ -229,23 +285,21 @@ def main():
             dfs_list.append(df)
             
     if not results_list:
-        st.warning("No valid routes found in Route Definitions.")
+        st.warning("No valid routes found. Try Resetting to Defaults.")
         return
 
-    # Extract Performance Data dynamically
-    perf_map = {row["route_id"]: row["capacity_mg_g"] for _, row in PERF_DF.iterrows()}
+    perf_map = {row["route_id"]: float(row["capacity_mg_g"]) for _, row in PERF_DF.iterrows()}
 
-    # TABS
+    # --- TABS ---
     tab1, tab2, tab3, tab4 = st.tabs(["LCA Results", "Sensitivity Analysis", "Inventory & System", "Literature"])
 
     # --- TAB 1: RESULTS ---
     with tab1:
         st.header("Life Cycle Impact Assessment")
         
-        # Build Summary Dataframe
         summary_rows = []
         for r in results_list:
-            cap = perf_map.get(r["id"], 0.001) # Avoid div/0
+            cap = perf_map.get(r["id"], 0.001)
             summary_rows.append({
                 "Bead": r["name"],
                 "Total GWP (FU1)": r["Total GWP"],
@@ -263,46 +317,39 @@ def main():
             fig_log = px.bar(sum_df, x="Bead", y="Total GWP (FU1)", color="Bead", 
                              log_y=True, title="Total GWP (Log Scale)", text_auto='.2s')
             st.plotly_chart(fig_log, use_container_width=True)
-            st.caption("Note: Logarithmic scale emphasizes order of magnitude differences[cite: 84].")
 
         with col2:
-            st.subheader("GWP Contribution (%)")
-            # Prepare data for 100% stacked bar
+            st.subheader("Impact Contribution (%)")
             stack_data = []
             for r in results_list:
                 stack_data.append({"Bead": r["name"], "Source": "Electricity", "GWP": r["Electricity GWP"]})
                 stack_data.append({"Bead": r["name"], "Source": "Chemicals", "GWP": r["Non-Electric GWP"]})
             
             fig_stack = px.bar(pd.DataFrame(stack_data), x="Bead", y="GWP", color="Source", 
-                               title="Percentage Contribution Breakdown", text_auto='.2s')
+                               title="Breakdown: Electricity vs Chemicals", text_auto='.2s')
             st.plotly_chart(fig_stack, use_container_width=True)
-            st.caption("Electricity dominates impact (>98%) for both beads.")
             
         st.subheader("Performance Normalized (FU2)")
         fig_fu2 = px.bar(sum_df, x="Bead", y="GWP per g Cu (FU2)", color="Bead", title="GWP per g Copper Removed", text_auto='.2f')
         st.plotly_chart(fig_fu2, use_container_width=True)
-        st.caption("Higher capacity of MOF bead partially offsets its higher production footprint[cite: 93].")
 
     # --- TAB 2: SENSITIVITY ---
     with tab2:
         st.header("Sensitivity Analysis")
         
         st.subheader("1. Grid Intensity Sensitivity")
-        st.markdown("How does the location (grid mix) affect the total GWP? ")
+        grids = {"QC Hydro": 0.002, "Canada Avg": 0.1197, "UK Grid": 0.225, "EU Avg": 0.25, "US Avg": 0.38, "China Grid": 0.58}
         
-        grids = {
-            "QC Hydro (0.002)": 0.002,
-            "Canada Avg (0.12)": 0.1197,
-            "UK Grid (0.23)": 0.225,
-            "EU Avg (0.25)": 0.25,
-            "US Avg (0.38)": 0.38,
-            "China Grid (0.58)": 0.58
-        }
-        
+        # We calculate this dynamically based on current route recipes, just swapping the grid factor
         sens_rows = []
         for g_name, g_val in grids.items():
+            # Use a temporary EF dataframe for calculation
+            temp_ef = EF_DF.copy()
+            # Find electricity row (assuming standard name) and update it
+            temp_ef.loc[temp_ef["reagent_name"].str.contains("Electricity"), "GWP_kgCO2_per_kg"] = g_val
+            
             for rid in unique_routes:
-                res, _ = calculate_impacts(rid, EF_DF, ROUTES_DF, grid_override_val=g_val)
+                res, _ = calculate_impacts(rid, temp_ef, ROUTES_DF)
                 sens_rows.append({"Grid": g_name, "Bead": res["name"], "Total GWP": res["Total GWP"]})
         
         df_sens = pd.DataFrame(sens_rows)
@@ -311,30 +358,20 @@ def main():
         
         st.divider()
         st.subheader("2. Batch Scaling Effect")
-        st.markdown("Modeling the reduction in electricity per kg as batch size increases.")
+        st.markdown("Projection of how GWP drops if batch size increases (reducing fixed electricity overhead).")
         
-        # Model: E_total = (E_fixed / batch_mass) + E_variable
-        # Assuming current high values are 90% fixed overhead from freeze dryer
         batch_sizes = [0.001, 0.01, 0.1, 1.0, 10.0] # kg
         scale_rows = []
         
         for rid in unique_routes:
-            # Get base electricity from user input (assumed to be the small scale 1kg equivalent)
             base_res, _ = calculate_impacts(rid, EF_DF, ROUTES_DF)
             base_elec_per_kg = base_res["Electricity kWh"]
-            
-            # Simple scaling model: 
-            # Current (0.0004 kg batch) -> huge per kg.
-            # E_per_kg_new = Base_E_per_kg * (Reference_Batch / New_Batch)
-            ref_batch_kg = 0.0005 # ~0.5g typical lab batch
+            ref_batch_kg = 0.0005 
             
             for b_size in batch_sizes:
-                # Apply scaling factor with a floor (variable energy)
                 scaling_factor = ref_batch_kg / b_size
-                # Assume 10% is variable (linear), 90% is fixed overhead that scales down
+                # Model: 90% fixed overhead scales down, 10% variable stays
                 new_elec = base_elec_per_kg * (0.1 + 0.9 * scaling_factor)
-                
-                # Recalculate GWP
                 new_gwp = (new_elec * base_res["Electricity EF Used"]) + base_res["Non-Electric GWP"]
                 scale_rows.append({"Batch Size (kg)": b_size, "Bead": base_res["name"], "Estimated GWP": new_gwp})
                 
@@ -345,9 +382,8 @@ def main():
 
     # --- TAB 3: INVENTORY ---
     with tab3:
-        st.header("Process Inventory")
+        st.header("Process Inventory & Breakdown")
         
-        # Combine all contribution dfs
         all_contribs = []
         for i, df in enumerate(dfs_list):
             df["Bead"] = results_list[i]["name"]
@@ -356,24 +392,36 @@ def main():
         if all_contribs:
             df_all = pd.concat(all_contribs)
             
-            # Non-Electric Bar Chart
+            # 1. Chemical Impacts Only
+            st.subheader("A. Chemical Impacts (Excluding Electricity)")
             df_ne = df_all[df_all["Category"] != "Electricity"]
             fig_ne = px.bar(df_ne, x="Bead", y="GWP", color="Component", 
-                            title="Chemical Impacts Only (Excluding Electricity)", barmode="group")
+                            title="Chemical GWP Contribution", barmode="group")
             st.plotly_chart(fig_ne, use_container_width=True)
+
+            st.divider()
+
+            # 2. NEW: Total Impacts Including Electricity (Requested Figure)
+            st.subheader("B. Total Process Impacts (Including Electricity)")
+            st.caption("This chart puts the chemical impacts in perspective with the electricity demand.")
+            fig_total_breakdown = px.bar(df_all, x="Bead", y="GWP", color="Component", 
+                                         title="Total GWP Breakdown (Electricity vs Components)", barmode="stack")
+            st.plotly_chart(fig_total_breakdown, use_container_width=True)
             
-            # Mass Inventory
+            st.divider()
+
+            # 3. Mass Inventory
+            st.subheader("C. Mass Inventory")
             fig_mass = px.bar(df_ne, x="Bead", y="Mass (kg)", color="Component", 
                               title="Mass Input per kg Product", barmode="group")
             st.plotly_chart(fig_mass, use_container_width=True)
         
-        st.subheader("System Boundary")
-        
+        st.subheader("D. System Boundary")
         st.plotly_chart(plot_system_boundary(), use_container_width=True)
 
     # --- TAB 4: LITERATURE ---
     with tab4:
-        st.header("Literature Comparison (Figure 8)")
+        st.header("Literature Comparison")
         
         # Combine Lit DF with Current Results
         current_data = []
@@ -381,18 +429,19 @@ def main():
             current_data.append({
                 "Material": f"{r['name']} (This Work)",
                 "GWP_kgCO2_per_kg": r["Total GWP"],
-                "Type": "This Work",
-                "Source": "This Study"
+                "Source": "This Work", # Distinct source for coloring
+                "Type": "This Work"
             })
             
         lit_combined = pd.concat([LIT_DF, pd.DataFrame(current_data)])
         
-        fig_lit = px.bar(lit_combined, x="Material", y="GWP_kgCO2_per_kg", color="Type", 
+        # Updated Figure 8: Colored by Source to distinguish different papers
+        fig_lit = px.bar(lit_combined, x="Material", y="GWP_kgCO2_per_kg", color="Source", 
                          log_y=True, title="Global Warming Potential Comparison (Log Scale)",
-                         text="Source",
-                         color_discrete_map={"This Work": "red", "Literature": "blue"})
+                         text="Source")
+        
         st.plotly_chart(fig_lit, use_container_width=True)
-        st.caption("Literature sources include Luo et al. (2021), Gu et al. (2018), and Arfasa & Tilahun (2025) .")
+        st.caption("Each color represents a different study/source. Note the log scale.")
 
 if __name__ == "__main__":
     main()
