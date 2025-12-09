@@ -22,15 +22,25 @@ st.set_page_config(page_title="Screening LCA Explorer", layout="wide")
 @st.cache_data
 def load_data():
     """Load all necessary CSV files from the data directory."""
-    try:
-        ef = pd.read_csv(DATA_DIR / "emission_factors.csv")
-        routes = pd.read_csv(DATA_DIR / "lca_routes.csv")
-        perf = pd.read_csv(DATA_DIR / "performance.csv")
-        lit = pd.read_csv(DATA_DIR / "literature.csv")
-        return ef, routes, perf, lit
-    except Exception as e:
-        st.error(f"Error loading data: {e}. Please ensure CSV files are in the 'data' folder.")
+    # We try reading with 'utf-8' first, then 'latin1' as fallback to prevent crashes
+    def read_safe(path):
+        if not path.exists():
+            return None
+        try:
+            return pd.read_csv(path, encoding="utf-8")
+        except UnicodeDecodeError:
+            return pd.read_csv(path, encoding="latin1")
+
+    ef = read_safe(DATA_DIR / "emission_factors.csv")
+    routes = read_safe(DATA_DIR / "lca_routes.csv")
+    perf = read_safe(DATA_DIR / "performance.csv")
+    lit = read_safe(DATA_DIR / "literature.csv")
+    
+    # Check if files loaded
+    if any(df is None for df in [ef, routes, perf, lit]):
         return None, None, None, None
+        
+    return ef, routes, perf, lit
 
 EF_DF, ROUTES_DF, PERF_DF, LIT_DF = load_data()
 
@@ -152,11 +162,13 @@ def plot_system_boundary():
 # MAIN APP LAYOUT
 # -----------------------------------------------------------------------------
 def main():
-    if EF_DF is None: return
+    if EF_DF is None:
+        st.error("Could not load data. Please ensure 'data/literature.csv', 'data/emission_factors.csv', 'data/lca_routes.csv', and 'data/performance.csv' exist and are valid CSVs.")
+        return
 
     st.title("Screening LCA: Ref-Bead vs U@Bead")
     st.markdown("""
-    [cite_start]**Data Source:** All calculations are strictly derived from the *Supplementary Information* calculations provided in the uploaded text [cite: 114-286].
+    [cite_start]**Data Source:** All calculations are strictly derived from the *Supplementary Information* calculations provided in the text [cite: 114-286].
     
     **Scope:** Gate-to-gate screening LCA focused on laboratory synthesis conditions.
     """)
@@ -164,6 +176,10 @@ def main():
     # --- Pre-Calculate Results for Both Routes ---
     res_ref, df_ref = calculate_impacts(ID_REF, EF_DF, ROUTES_DF)
     res_mof, df_mof = calculate_impacts(ID_MOF, EF_DF, ROUTES_DF)
+
+    if not res_ref or not res_mof:
+        st.error("Error calculating routes. Please check lca_routes.csv")
+        return
 
     # --- Get Adsorption Capacity ---
     cap_ref = float(PERF_DF[PERF_DF["route_id"] == ID_REF]["capacity_mg_g"].iloc[0]) # 77
@@ -202,7 +218,7 @@ def main():
             ])
             fig_fu1 = px.bar(df_fu1, x="Bead", y="GWP", color="Bead", title="Total GWP per kg Bead", barmode="group")
             st.plotly_chart(fig_fu1, use_container_width=True)
-            st.caption("Dominated by electricity (~99%).")
+            [cite_start]st.caption("Dominated by electricity (~99%)[cite: 90].")
 
         with col2:
             st.subheader("2. Performance Normalized (FU2)")
@@ -213,7 +229,7 @@ def main():
             ])
             fig_fu2 = px.bar(df_fu2, x="Bead", y="GWP", color="Bead", title="GWP per g Cu Removed", barmode="group")
             st.plotly_chart(fig_fu2, use_container_width=True)
-            st.caption("Gap narrows due to higher capacity of MOF bead (116 vs 77 mg/g).")
+            [cite_start]st.caption("Gap narrows due to higher capacity of MOF bead (116 vs 77 mg/g)[cite: 93].")
 
         st.divider()
         st.subheader("3. Non-Electric Impacts (Chemicals Only)")
@@ -230,7 +246,7 @@ def main():
         fig_ne = px.bar(df_ne, x="Bead", y="GWP (kg CO2e)", color="Component", 
                         title="Chemical Impacts Only (Excluding Electricity)", barmode="group")
         st.plotly_chart(fig_ne, use_container_width=True)
-        st.caption("Shows the additional burden of MOF reagents (Ethanol, Formic, ZrCl4).")
+        [cite_start]st.caption("Shows the additional burden of MOF reagents (Ethanol, Formic, ZrCl4)[cite: 89].")
 
     # -------------------------------------------------------------------------
     # TAB 2: INVENTORY
@@ -257,7 +273,7 @@ def main():
         ]
         fig_elec = px.bar(pd.DataFrame(elec_data), y="Step", x="kWh", color="Step", orientation='h', facet_col="Bead", title="Electricity Consumption by Step")
         st.plotly_chart(fig_elec, use_container_width=True)
-        st.caption("Freeze drying is the primary hotspot.")
+        [cite_start]st.caption("Freeze drying is the primary hotspot[cite: 59, 91].")
         
         st.subheader("System Boundary")
         st.plotly_chart(plot_system_boundary(), use_container_width=True)
@@ -280,7 +296,7 @@ def main():
                          log_y=True, title="GWP Comparison (Log Scale)",
                          color_discrete_map={"This Work": "red", "Literature": "blue"})
         st.plotly_chart(fig_lit, use_container_width=True)
-        st.caption("Note: 'This Work' values are high due to unscaled lab electricity allocation.")
+        [cite_start]st.caption("Note: 'This Work' values are high due to unscaled lab electricity allocation[cite: 109].")
 
 if __name__ == "__main__":
     main()
