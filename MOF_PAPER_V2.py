@@ -212,8 +212,8 @@ LIT_DF = st.session_state["lit_df"]
 # HEADER LOGOS
 # -----------------------------------------------------------------------------
 def render_header_logos():
-    cov_path = LOGO_DIR / "cov.png"
-    ubc_path = LOGO_DIR / "ubc.png"
+    cov_path = DATA_DIR  / "cov.png"
+    ubc_path = DATA_DIR / "ubc.png"
 
     col_left, col_spacer, col_right = st.columns([1, 2, 1])
     with col_left:
@@ -1270,3 +1270,4 @@ the electricity per kilogram of bead.
 
 if __name__ == "__main__":
     main()
+
