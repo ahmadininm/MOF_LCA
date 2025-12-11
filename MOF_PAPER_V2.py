@@ -18,7 +18,7 @@ except ImportError:
 # -----------------------------------------------------------------------------
 BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = BASE_DIR / "data"
-LOGO_DIR = BASE_DIR / "assets"  # put ubc.png, ame.png, cov.png in ./assets
+LOGO_DIR = BASE_DIR / "assets"  # put cov.png (left) and ubc.png (right) in ./assets
 
 # Route IDs
 ID_REF = "ref"
@@ -81,6 +81,93 @@ Guidelines:
 
 
 # -----------------------------------------------------------------------------
+# ELECTRICITY STEP DATA (LAB + CAPACITY)
+# -----------------------------------------------------------------------------
+def get_default_elec_steps_df() -> pd.DataFrame:
+    """
+    Default per-step electricity inventory at lab scale, including:
+    - route_id / bead / step
+    - lab_batch_kg: actual mass per batch in the experiment
+    - kWh_per_kg: lab-scale electricity intensity per kg bead
+    - capacity_kg: effective equipment capacity per batch (defaults to lab_batch_kg,
+      so there is no scaling unless the user changes it).
+    """
+    data = [
+        # Ref-Bead (PDChNF–chitosan reference bead), lab batch = 0.0004 kg
+        {
+            "route_id": ID_REF,
+            "Bead": "Ref-Bead (Polymer)",
+            "Step": "Microfluidiser",
+            "kWh_per_kg": 1.24e3,
+            "lab_batch_kg": 0.0004,
+        },
+        {
+            "route_id": ID_REF,
+            "Bead": "Ref-Bead (Polymer)",
+            "Step": "Hotplate mixing",
+            "kWh_per_kg": 9.38e3,
+            "lab_batch_kg": 0.0004,
+        },
+        {
+            "route_id": ID_REF,
+            "Bead": "Ref-Bead (Polymer)",
+            "Step": "Hotplate crosslinking",
+            "kWh_per_kg": 9.38e3,
+            "lab_batch_kg": 0.0004,
+        },
+        {
+            "route_id": ID_REF,
+            "Bead": "Ref-Bead (Polymer)",
+            "Step": "Freeze-drying",
+            "kWh_per_kg": 7.36e4,
+            "lab_batch_kg": 0.0004,
+        },
+        # U@Bead (MOF-functionalised bead), lab batch = 0.0006 kg
+        {
+            "route_id": ID_MOF,
+            "Bead": "U@Bead (MOF-Functionalised)",
+            "Step": "Carry-over (Ref support)",
+            "kWh_per_kg": 8.15e4,
+            "lab_batch_kg": 0.0006,
+        },
+        {
+            "route_id": ID_MOF,
+            "Bead": "U@Bead (MOF-Functionalised)",
+            "Step": "UiO stirring (Zr step)",
+            "kWh_per_kg": 1.25e4,
+            "lab_batch_kg": 0.0006,
+        },
+        {
+            "route_id": ID_MOF,
+            "Bead": "U@Bead (MOF-Functionalised)",
+            "Step": "UiO stirring (linker step)",
+            "kWh_per_kg": 1.25e4,
+            "lab_batch_kg": 0.0006,
+        },
+        {
+            "route_id": ID_MOF,
+            "Bead": "U@Bead (MOF-Functionalised)",
+            "Step": "Second freeze-drying",
+            "kWh_per_kg": 4.91e4,
+            "lab_batch_kg": 0.0006,
+        },
+    ]
+    df = pd.DataFrame(data)
+    # No scaling by default: capacity_kg = lab_batch_kg
+    df["capacity_kg"] = df["lab_batch_kg"]
+    return df
+
+
+def get_electricity_step_data() -> pd.DataFrame:
+    """
+    Returns the current per-step electricity table (with lab batch and capacity).
+    """
+    if "elec_steps_df" not in st.session_state:
+        st.session_state["elec_steps_df"] = get_default_elec_steps_df()
+    return st.session_state["elec_steps_df"]
+
+
+# -----------------------------------------------------------------------------
 # DATA LOADING & SESSION STATE
 # -----------------------------------------------------------------------------
 @st.cache_data
@@ -103,7 +190,7 @@ def load_default_data():
 
 
 def reset_data():
-    """Resets session state to default CSV values."""
+    """Resets session state to default CSV values and default electricity steps."""
     ef, routes, perf, lit = load_default_data()
     st.session_state["ef_df"] = ef
     st.session_state["routes_df"] = routes
@@ -118,6 +205,8 @@ def reset_data():
         "US Avg": 0.38,
         "China Grid": 0.58,
     }
+    # Reset electricity steps (lab-scale, no scaling)
+    st.session_state["elec_steps_df"] = get_default_elec_steps_df()
 
 
 # Initialise Session State
@@ -135,21 +224,20 @@ LIT_DF = st.session_state["lit_df"]
 # HEADER LOGOS
 # -----------------------------------------------------------------------------
 def render_header_logos():
-    ubc_path = LOGO_DIR / "ubc.png"
-    ame_path = LOGO_DIR / "ame.png"
+    """
+    Show cov.png on the top left and ubc.png on the top right of all pages.
+    """
     cov_path = LOGO_DIR / "cov.png"
+    ubc_path = LOGO_DIR / "ubc.png"
 
-    col_left, col_mid, col_right = st.columns([1, 1, 1])
+    col_left, col_right = st.columns([1, 1])
 
     with col_left:
-        if ubc_path.exists():
-            st.image(str(ubc_path))
-    with col_mid:
-        if ame_path.exists():
-            st.image(str(ame_path))
-    with col_right:
         if cov_path.exists():
             st.image(str(cov_path))
+    with col_right:
+        if ubc_path.exists():
+            st.image(str(ubc_path), use_column_width=False)
 
 
 # -----------------------------------------------------------------------------
@@ -171,7 +259,7 @@ def calculate_impacts(
 
     yield_multiplier = 1.0 / (yield_rate / 100.0)
 
-    # Electricity
+    # Electricity (already possibly scaled by capacity utilisation)
     base_elec_kwh = float(route_data.iloc[0]["electricity_kwh_per_fu"])
     elec_kwh = base_elec_kwh * efficiency_factor * yield_multiplier
 
@@ -195,10 +283,10 @@ def calculate_impacts(
         reagent = row["reagent_name"]
         base_mass = float(row["mass_kg_per_fu"])
 
-        # Yield Impact
+        # Yield impact
         mass_needed = base_mass * yield_multiplier
 
-        # Recycling Impact
+        # Recycling impact (for selected solvents)
         is_solvent = reagent in ["Ethanol", "Formic acid (88%)", "Acetic acid"]
         effective_mass = mass_needed * (1 - (recycling_rate / 100.0)) if is_solvent else mass_needed
 
@@ -305,28 +393,9 @@ def plot_sankey_diagram(results_list, route_id=None):
     return fig
 
 
-def get_electricity_step_data() -> pd.DataFrame:
-    """
-    Electricity per process step, per kg bead, from the worked LCA inventory:contentReference[oaicite:3]{index=3}.
-    """
-    data = [
-        # Ref-Bead
-        {"Bead": "Ref-Bead (Polymer)", "Step": "Microfluidiser", "kWh_per_kg": 1.24e3},
-        {"Bead": "Ref-Bead (Polymer)", "Step": "Hotplate mixing", "kWh_per_kg": 9.38e3},
-        {"Bead": "Ref-Bead (Polymer)", "Step": "Hotplate crosslinking", "kWh_per_kg": 9.38e3},
-        {"Bead": "Ref-Bead (Polymer)", "Step": "Freeze-drying", "kWh_per_kg": 7.36e4},
-        # U@Bead MOF bead
-        {"Bead": "U@Bead (MOF-Functionalised)", "Step": "Carry-over (Ref support)", "kWh_per_kg": 8.15e4},
-        {"Bead": "U@Bead (MOF-Functionalised)", "Step": "UiO stirring (Zr step)", "kWh_per_kg": 1.25e4},
-        {"Bead": "U@Bead (MOF-Functionalised)", "Step": "UiO stirring (linker step)", "kWh_per_kg": 1.25e4},
-        {"Bead": "U@Bead (MOF-Functionalised)", "Step": "Second freeze-drying", "kWh_per_kg": 4.91e4},
-    ]
-    return pd.DataFrame(data)
-
-
 def create_system_boundary_figure() -> go.Figure:
     """
-    Simple system boundary diagram for the gate to gate LCA scope:contentReference[oaicite:4]{index=4}.
+    Simple system boundary diagram for the gate to gate LCA scope.
     """
     fig = go.Figure()
 
@@ -529,6 +598,41 @@ def main():
     lit_df = st.session_state["lit_df"]
 
     # -------------------------------------------------------------------------
+    # ELECTRICITY CAPACITY SCALING (PER STEP)
+    # -------------------------------------------------------------------------
+    elec_steps_df = get_electricity_step_data()
+
+    # Apply capacity-based scaling to electricity_kwh_per_fu for each route
+    routes_df_effective = routes_df.copy()
+    scaled_elec_by_route = {}
+
+    for rid in routes_df_effective["route_id"].unique():
+        step_rows = elec_steps_df[elec_steps_df["route_id"] == rid]
+        if step_rows.empty:
+            continue
+
+        scaled_specific_steps = []
+        for _, row in step_rows.iterrows():
+            k_lab = float(row["kWh_per_kg"])
+            lab_batch = float(row["lab_batch_kg"])
+            capacity = float(row.get("capacity_kg", lab_batch))
+            if capacity <= 0:
+                capacity = lab_batch
+            # scaling_factor = lab_batch / capacity
+            scaling_factor = lab_batch / capacity
+            k_scaled = k_lab * scaling_factor
+            scaled_specific_steps.append(k_scaled)
+
+        total_scaled_elec = float(np.sum(scaled_specific_steps))
+        scaled_elec_by_route[rid] = total_scaled_elec
+        routes_df_effective.loc[
+            routes_df_effective["route_id"] == rid, "electricity_kwh_per_fu"
+        ] = total_scaled_elec
+
+    # Use the effective routes dataframe for all subsequent calculations
+    routes_df = routes_df_effective
+
+    # -------------------------------------------------------------------------
     # CALCULATIONS
     # -------------------------------------------------------------------------
     unique_routes = routes_df["route_id"].unique()
@@ -668,6 +772,26 @@ def main():
     with tab2:
         st.header("Sensitivity and scaling")
 
+        # 0. Equipment capacity and utilisation
+        st.subheader("0. Equipment capacity and utilisation")
+        st.markdown(
+            "The table below specifies, for each electricity-using step, the laboratory batch size "
+            "and an effective equipment capacity per batch. By default, capacity equals the lab "
+            "batch (no scaling). Increasing the capacity reduces electricity per kg in the main LCA "
+            "results while keeping the functional unit at 1 kg of beads."
+        )
+
+        elec_steps_df = get_electricity_step_data()
+        st.caption("Edit 'capacity_kg' to explore more realistic utilisation scenarios.")
+        st.session_state["elec_steps_df"] = st.data_editor(
+            elec_steps_df,
+            key="ed_elec_steps",
+            num_rows="fixed",
+            disabled=["route_id", "Bead", "Step", "lab_batch_kg", "kWh_per_kg"],
+        )
+
+        st.divider()
+
         # 1. Grid intensity sensitivity
         st.subheader("1. Grid intensity sensitivity")
 
@@ -728,7 +852,7 @@ def main():
         # 2. Batch scaling effect (fixed curve up to 100 kg)
         st.subheader("2. Batch scaling effect (electricity driven)")
 
-        # lab batch sizes from the LCA inventory (kg per batch):contentReference[oaicite:5]{index=5}
+        # lab batch sizes from the original LCA inventory (kg per batch)
         LAB_BATCH_REF_KG = 0.0004
         LAB_BATCH_MOF_KG = 0.0006
 
@@ -785,17 +909,24 @@ def main():
 
         st.divider()
 
-        # 3. Electricity demand per process step
+        # 3. Electricity demand per process step (scaled by current capacities)
         st.subheader("3. Electricity demand per process step")
-        elec_step_df = get_electricity_step_data()
+        elec_step_df_plot = get_electricity_step_data().copy()
+        # Compute scaled kWh/kg based on current capacity assumptions
+        def _scaled_kwh(row):
+            cap = row["capacity_kg"] if row["capacity_kg"] > 0 else row["lab_batch_kg"]
+            return row["kWh_per_kg"] * (row["lab_batch_kg"] / cap)
+
+        elec_step_df_plot["kWh_per_kg_scaled"] = elec_step_df_plot.apply(_scaled_kwh, axis=1)
+
         fig_steps = px.bar(
-            elec_step_df,
+            elec_step_df_plot,
             x="Step",
-            y="kWh_per_kg",
+            y="kWh_per_kg_scaled",
             color="Bead",
             barmode="group",
             log_y=True,
-            title="Electricity demand by process step (kWh per kg bead)",
+            title="Electricity demand by process step (kWh per kg bead, with current capacities)",
             text_auto=".2s",
         )
         fig_steps.update_layout(xaxis_tickangle=-30)
