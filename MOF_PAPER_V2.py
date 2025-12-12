@@ -421,11 +421,16 @@ def calculate_impacts(
 # -----------------------------------------------------------------------------
 # PLOTTING HELPERS
 # -----------------------------------------------------------------------------
-def plot_sankey_diagram(results_list, route_id=None):
-    """Build a simple Sankey diagram for a given route (Ref or MOF)."""
+def plot_sankey_diagram(results_list, contrib_df_all=None, route_id=None):
+    """
+    Build a Sankey diagram. If contrib_df_all is provided, itemise individual
+    components (electricity, each chemical, transport). Otherwise, fall back
+    to the aggregated 4-node diagram.
+    """
     if not results_list:
         return go.Figure()
 
+    # Choose which route to show
     if route_id is not None:
         target_res = next((r for r in results_list if r["id"] == route_id), None)
         if target_res is None:
@@ -433,9 +438,87 @@ def plot_sankey_diagram(results_list, route_id=None):
     else:
         target_res = results_list[0]
 
+    total_gwp = target_res["Total GWP"]
+
+    # If we have detailed contributions, build an itemised Sankey
+    if contrib_df_all is not None and "Bead" in contrib_df_all.columns:
+        df_bead = contrib_df_all[contrib_df_all["Bead"] == target_res["name"]].copy()
+        if "GWP" in df_bead.columns:
+            df_bead = df_bead[df_bead["GWP"] > 0]
+
+        if not df_bead.empty:
+            # Node labels: one per Component, plus Lab synthesis and Total GWP
+            comp_labels = list(dict.fromkeys(df_bead["Component"].tolist()))
+            lab_label = f"{target_res['name']} synthesis"
+            total_label = "Total GWP"
+
+            node_labels = comp_labels + [lab_label, total_label]
+
+            # Simple colour mapping
+            node_colors = []
+            for lbl in node_labels:
+                low = lbl.lower()
+                if "electricity" in low:
+                    node_colors.append("#FFD700")  # yellow
+                elif "transport" in low or "logistics" in low:
+                    node_colors.append("#A9A9A9")  # grey
+                elif lbl == lab_label:
+                    node_colors.append("#87CEFA")  # light blue
+                elif lbl == total_label:
+                    node_colors.append("#FF6347")  # red
+                else:
+                    node_colors.append("#90EE90")  # light green for chemicals
+
+            idx = {lbl: i for i, lbl in enumerate(node_labels)}
+
+            sources = []
+            targets = []
+            values = []
+
+            # Links: each component -> lab synthesis
+            for _, row in df_bead.iterrows():
+                comp = row["Component"]
+                gwp_val = float(row["GWP"])
+                sources.append(idx[comp])
+                targets.append(idx[lab_label])
+                values.append(gwp_val)
+
+            # Lab synthesis -> Total GWP
+            # Use sum of contributions to avoid mismatch
+            total_from_components = float(df_bead["GWP"].sum())
+            sources.append(idx[lab_label])
+            targets.append(idx[total_label])
+            values.append(total_from_components)
+
+            fig = go.Figure(
+                data=[
+                    go.Sankey(
+                        node=dict(
+                            pad=15,
+                            thickness=20,
+                            line=dict(color="black", width=0.5),
+                            label=node_labels,
+                            color=node_colors,
+                        ),
+                        link=dict(
+                            source=sources,
+                            target=targets,
+                            value=values,
+                        ),
+                    )
+                ]
+            )
+
+            fig.update_layout(
+                title_text=f"Impact flow (itemised): {target_res['name']}",
+                font_size=10,
+                height=400,
+            )
+            return fig
+
+    # Fallback to original aggregated 4-node version
     elec_gwp = target_res["Electricity GWP"]
     chem_gwp = target_res["Non-Electric GWP"]
-    total_gwp = target_res["Total GWP"]
 
     labels = ["Electricity Source", "Chemical Supply", "Lab Synthesis", "Total GWP"]
     colors = ["#FFD700", "#90EE90", "#87CEFA", "#FF6347"]
@@ -1444,13 +1527,13 @@ the electricity per kilogram of bead.
             with col_ref1:
                 st.markdown("Baseline")
                 st.plotly_chart(
-                    plot_sankey_diagram(base_results_list, route_id=ID_REF),
+                    plot_sankey_diagram(base_results_list, df_all_base, route_id=ID_REF),
                     use_container_width=True,
                 )
             with col_ref2:
                 st.markdown("Scaled")
                 st.plotly_chart(
-                    plot_sankey_diagram(scaled_results_list, route_id=ID_REF),
+                    plot_sankey_diagram(scaled_results_list, df_all_scaled, route_id=ID_REF),
                     use_container_width=True,
                 )
 
@@ -1459,13 +1542,13 @@ the electricity per kilogram of bead.
             with col_mof1:
                 st.markdown("Baseline")
                 st.plotly_chart(
-                    plot_sankey_diagram(base_results_list, route_id=ID_MOF),
+                    plot_sankey_diagram(base_results_list, df_all_base, route_id=ID_MOF),
                     use_container_width=True,
                 )
             with col_mof2:
                 st.markdown("Scaled")
                 st.plotly_chart(
-                    plot_sankey_diagram(scaled_results_list, route_id=ID_MOF),
+                    plot_sankey_diagram(scaled_results_list, df_all_scaled, route_id=ID_MOF),
                     use_container_width=True,
                 )
 
