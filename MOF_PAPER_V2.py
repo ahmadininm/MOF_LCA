@@ -590,88 +590,96 @@ def plot_sankey_diagram(results_list, contrib_df_all=None, step_df=None, route_i
     return fig
 
 
-def create_system_boundary_figure() -> go.Figure:
+def render_system_boundary_graphviz():
     """
-    Simple system boundary diagram for the gate to gate LCA scope.
+    Renders the system boundary using Graphviz to show included vs excluded steps.
     """
-    fig = go.Figure()
+    dot = """
+    digraph {
+        rankdir=LR;
+        bgcolor="transparent";
+        node [shape=box, style="filled,rounded", fontname="Sans-Serif", fontsize=10];
+        edge [fontname="Sans-Serif", fontsize=9, color="#666666"];
 
-    # Main system boundary box
-    fig.add_shape(
-        type="rect",
-        x0=0.25,
-        y0=0.2,
-        x1=0.75,
-        y1=0.8,
-        line=dict(color="black", width=2),
-        fillcolor="rgba(144, 238, 144, 0.1)",
-    )
+        # Excluded Upstream
+        subgraph cluster_upstream {
+            label = "Upstream (Excluded)";
+            style = "dashed";
+            color = "#808080";
+            fontcolor = "#808080";
+            node [fillcolor="#f9f9f9", color="#808080", fontcolor="#808080"];
+            
+            Raw [label="Raw Materials\n(Fishery waste, Mining, Fossil fuels)"];
+            Trans [label="Transport\n(to Laboratory)"];
+        }
 
-    # Upstream box (excluded)
-    fig.add_shape(
-        type="rect",
-        x0=0.02,
-        y0=0.35,
-        x1=0.20,
-        y1=0.65,
-        line=dict(color="grey", width=1),
-        fillcolor="rgba(200, 200, 200, 0.1)",
-    )
-    fig.add_annotation(
-        x=0.11,
-        y=0.5,
-        text="Upstream:\nFisheries,\ncrab processing,\nchitin purification\n(excluded)",
-        showarrow=False,
-        font=dict(size=10),
-    )
+        # Included System Boundary
+        subgraph cluster_gate {
+            label = "System Boundary (Included: Gate-to-Gate)";
+            style = "solid";
+            color = "#2E8B57";  # SeaGreen
+            penwidth = 2;
+            fontcolor = "#2E8B57";
+            node [fillcolor="#E8F5E9", color="#2E8B57", fontcolor="black"];
+            
+            Inputs [label="Inputs:\nElectricity, Water,\nReagents, Solvents"];
+            
+            subgraph cluster_ref {
+                label = "Ref-Bead Process";
+                style = "dotted";
+                color = "#2E8B57";
+                Process1 [label="Polymer Dissolution\n& Mixing"];
+                Process2 [label="Crosslinking\n& Washing"];
+                Process3 [label="Freeze-Drying 1"];
+            }
+            
+            subgraph cluster_mof {
+                label = "MOF Process (Add-on)";
+                style = "dotted";
+                color = "#2E8B57";
+                Process4 [label="UiO-66-NH₂\nGrowth (Zr + Linker)"];
+                Process5 [label="Freeze-Drying 2"];
+            }
+            
+            Product [label="Final Dry Bead\n(at Lab Gate)"];
+        }
 
-    # Downstream box (excluded)
-    fig.add_shape(
-        type="rect",
-        x0=0.80,
-        y0=0.35,
-        x1=0.98,
-        y1=0.65,
-        line=dict(color="grey", width=1),
-        fillcolor="rgba(200, 200, 200, 0.1)",
-    )
-    fig.add_annotation(
-        x=0.89,
-        y=0.5,
-        text="Use phase,\nregeneration,\nend of life\n(excluded)",
-        showarrow=False,
-        font=dict(size=10),
-    )
+        # Excluded Downstream
+        subgraph cluster_downstream {
+            label = "Downstream (Excluded)";
+            style = "dashed";
+            color = "#808080";
+            fontcolor = "#808080";
+            node [fillcolor="#f9f9f9", color="#808080", fontcolor="#808080"];
+            
+            Use [label="Use Phase\n(Copper Removal)"];
+            EOL [label="End of Life\n(Disposal/Regeneration)"];
+        }
 
-    # Main system annotation
-    fig.add_annotation(
-        x=0.5,
-        y=0.6,
-        text=(
-            "System boundary (included):\n"
-            "Lab scale bead synthesis\n"
-            "PDChNF–chitosan bead (Ref-Bead)\n"
-            "+ UiO-66-NH₂ growth and NaOH step\n"
-            "(U@Bead-2step-aUiO)"
-        ),
-        showarrow=False,
-        font=dict(size=11),
-    )
-
-    # Arrows
-    fig.add_annotation(x=0.22, y=0.5, ax=0.25, ay=0.5, showarrow=True, arrowhead=2)
-    fig.add_annotation(x=0.75, y=0.5, ax=0.78, ay=0.5, showarrow=True, arrowhead=2)
-
-    fig.update_xaxes(visible=False, range=[0, 1])
-    fig.update_yaxes(visible=False, range=[0, 1])
-
-    fig.update_layout(
-        title="System boundary for the screening LCA (gate to gate, lab scale)",
-        height=350,
-        margin=dict(l=20, r=20, t=70, b=20),
-    )
-
-    return fig
+        # Edges
+        Raw -> Trans;
+        Trans -> Inputs;
+        
+        Inputs -> Process1;
+        Inputs -> Process4;
+        
+        Process1 -> Process2;
+        Process2 -> Process3;
+        
+        Process3 -> Product [label="Ref-Bead", style="dashed"];
+        Process3 -> Process4 [label="Support"];
+        Process4 -> Process5;
+        Process5 -> Product [label="U@Bead"];
+        
+        Product -> Use;
+        Use -> EOL;
+    }
+    """
+    try:
+        st.graphviz_chart(dot, use_container_width=True)
+        st.caption("Figure: Gate-to-gate system boundary. Green box indicates processes included in the study.")
+    except Exception as e:
+        st.error(f"Graphviz rendering failed: {e}")
 
 
 # -----------------------------------------------------------------------------
@@ -1222,7 +1230,7 @@ the electricity per kilogram of bead.
             st.plotly_chart(fig_fu2_scaled, use_container_width=True)
 
         st.subheader("System boundary (schematic)")
-        st.plotly_chart(create_system_boundary_figure(), use_container_width=True)
+        render_system_boundary_graphviz()
 
     # --- TAB 2: SENSITIVITY ---
     with tab2:
@@ -1737,3 +1745,4 @@ the electricity per kilogram of bead.
 
 if __name__ == "__main__":
     main()
+
