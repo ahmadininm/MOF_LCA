@@ -1562,42 +1562,63 @@ the electricity per kilogram of bead.
             fig_mass.update_yaxes(matches=None, showticklabels=True)
             st.plotly_chart(fig_mass, use_container_width=True)
 
-# D. Impact flow (Sankey diagrams)
-            st.subheader("D. Impact flow (Sankey diagrams)")
+        # D. Impact flow (Sankey diagrams)
+        st.subheader("D. Impact flow (Sankey diagrams)")
 
-            st.markdown("**Ref-Bead (polymer only)**")
-            col_ref1, col_ref2 = st.columns(2)
-            with col_ref1:
-                st.markdown("Baseline")
-                st.plotly_chart(
-                    plot_sankey_diagram(base_results_list, route_id=ID_REF),
-                    use_container_width=True,
-                    key="sankey_ref_base"  # Added unique key
-                )
-            with col_ref2:
-                st.markdown("Scaled")
-                st.plotly_chart(
-                    plot_sankey_diagram(scaled_results_list, route_id=ID_REF),
-                    use_container_width=True,
-                    key="sankey_ref_scaled" # Added unique key
-                )
+        st.markdown("**Ref-Bead (polymer only)**")
+        col_ref1, col_ref2 = st.columns(2)
+        with col_ref1:
+            st.markdown("Baseline")
+            st.plotly_chart(
+                plot_sankey_diagram(
+                    base_results_list,
+                    contrib_df_all=df_all_base,
+                    step_df=step_df_baseline,
+                    route_id=ID_REF,
+                ),
+                use_container_width=True,
+                key="sankey_ref_base",
+            )
+        with col_ref2:
+            st.markdown("Scaled")
+            st.plotly_chart(
+                plot_sankey_diagram(
+                    scaled_results_list,
+                    contrib_df_all=df_all_scaled,
+                    step_df=step_df_scaled,
+                    route_id=ID_REF,
+                ),
+                use_container_width=True,
+                key="sankey_ref_scaled",
+            )
 
-            st.markdown("**U@Bead (MOF functionalised)**")
-            col_mof1, col_mof2 = st.columns(2)
-            with col_mof1:
-                st.markdown("Baseline")
-                st.plotly_chart(
-                    plot_sankey_diagram(base_results_list, route_id=ID_MOF),
-                    use_container_width=True,
-                    key="sankey_mof_base" # Added unique key
-                )
-            with col_mof2:
-                st.markdown("Scaled")
-                st.plotly_chart(
-                    plot_sankey_diagram(scaled_results_list, route_id=ID_MOF),
-                    use_container_width=True,
-                    key="sankey_mof_scaled" # Added unique key
-                )
+        st.markdown("**U@Bead (MOF functionalised)**")
+        col_mof1, col_mof2 = st.columns(2)
+        with col_mof1:
+            st.markdown("Baseline")
+            st.plotly_chart(
+                plot_sankey_diagram(
+                    base_results_list,
+                    contrib_df_all=df_all_base,
+                    step_df=step_df_baseline,
+                    route_id=ID_MOF,
+                ),
+                use_container_width=True,
+                key="sankey_mof_base",
+            )
+        with col_mof2:
+            st.markdown("Scaled")
+            st.plotly_chart(
+                plot_sankey_diagram(
+                    scaled_results_list,
+                    contrib_df_all=df_all_scaled,
+                    step_df=step_df_scaled,
+                    route_id=ID_MOF,
+                ),
+                use_container_width=True,
+                key="sankey_mof_scaled",
+            )
+
 
     # --- TAB 4: LITERATURE ---
     with tab4:
@@ -1729,5 +1750,6 @@ the electricity per kilogram of bead.
 
 if __name__ == "__main__":
     main()
+
 
 
