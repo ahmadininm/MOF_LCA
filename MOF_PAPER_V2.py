@@ -997,10 +997,10 @@ the electricity per kilogram of bead.
                 x="Bead",
                 y="Total GWP",
                 color="Bead",
-                log_y=True,
                 title="Total GWP per kg bead (baseline, FU1)",
                 text_auto=".2s",
             )
+            fig_log_base.update_yaxes(rangemode="tozero")
             st.plotly_chart(fig_log_base, use_container_width=True)
 
         with col2:
@@ -1010,10 +1010,10 @@ the electricity per kilogram of bead.
                 x="Bead",
                 y="Total GWP",
                 color="Bead",
-                log_y=True,
                 title="Total GWP per kg bead (scaled, FU1)",
                 text_auto=".2s",
             )
+            fig_log_scaled.update_yaxes(rangemode="tozero")
             st.plotly_chart(fig_log_scaled, use_container_width=True)
 
         # Electricity vs chemicals
@@ -1317,10 +1317,10 @@ the electricity per kilogram of bead.
                 y="kWh_per_kg",
                 color="Bead",
                 barmode="group",
-                log_y=True,
                 title="Electricity demand by process step (baseline, kWh per kg bead)",
                 text_auto=".2s",
             )
+            fig_steps_base.update_yaxes(rangemode="tozero")
             fig_steps_base.update_layout(xaxis_tickangle=-30)
             st.plotly_chart(fig_steps_base, use_container_width=True)
 
@@ -1332,10 +1332,10 @@ the electricity per kilogram of bead.
                 y="kWh_per_kg",
                 color="Bead",
                 barmode="group",
-                log_y=True,
                 title="Electricity demand by process step (scaled, kWh per kg bead)",
                 text_auto=".2s",
             )
+            fig_steps_scaled.update_yaxes(rangemode="tozero")
             fig_steps_scaled.update_layout(xaxis_tickangle=-30)
             st.plotly_chart(fig_steps_scaled, use_container_width=True)
 
@@ -1393,8 +1393,8 @@ the electricity per kilogram of bead.
 
             st.divider()
 
-            # B. Total breakdown (log scale)
-            st.subheader("B. Total breakdown (log scale)")
+            # B. Total breakdown
+            st.subheader("B. Total breakdown")
             col_tb1, col_tb2 = st.columns(2)
 
             with col_tb1:
@@ -1404,9 +1404,8 @@ the electricity per kilogram of bead.
                     x="Bead",
                     y="GWP",
                     color="Component",
-                    title="Total GWP breakdown (baseline, log scale)",
+                    title="Total GWP breakdown (baseline)",
                     barmode="group",
-                    log_y=True,
                 )
                 st.plotly_chart(fig_breakdown_base, use_container_width=True)
 
@@ -1417,9 +1416,8 @@ the electricity per kilogram of bead.
                     x="Bead",
                     y="GWP",
                     color="Component",
-                    title="Total GWP breakdown (scaled, log scale)",
+                    title="Total GWP breakdown (scaled)",
                     barmode="group",
-                    log_y=True,
                 )
                 st.plotly_chart(fig_breakdown_scaled, use_container_width=True)
 
@@ -1509,8 +1507,7 @@ the electricity per kilogram of bead.
                 x="Material",
                 y="GWP_kgCO2_per_kg",
                 color="Source",
-                log_y=True,
-                title="GWP comparison with literature (baseline, log scale)",
+                title="GWP comparison with literature (baseline)",
                 text="Source",
             )
             fig_lit_base.update_layout(xaxis_tickangle=-45)
@@ -1524,8 +1521,7 @@ the electricity per kilogram of bead.
                 x="Material",
                 y="GWP_kgCO2_per_kg",
                 color="Source",
-                log_y=True,
-                title="GWP comparison with literature (scaled, log scale)",
+                title="GWP comparison with literature (scaled)",
                 text="Source",
             )
             fig_lit_scaled.update_layout(xaxis_tickangle=-45)
@@ -1569,10 +1565,10 @@ the electricity per kilogram of bead.
         st.write("Sample questions (click to populate the box):")
         col_q1, col_q2 = st.columns(2)
         sample_questions = [
-            "Why is the GWP so high compared to literature?",
-            "Compare Ref-Bead and U@Bead results.",
-            "What is the biggest hotspot in this scenario?",
-            "How can I reduce the carbon footprint of bead production?",
+            "How does changing equipment utilisation affect GWP?",
+            "Compare baseline and scaled scenarios for Ref-Bead and U@Bead.",
+            "What is the biggest hotspot in the current scaled scenario?",
+            "Which equipment changes give the largest reductions in electricity demand?",
         ]
 
         # Ensure the session key exists for the text area
