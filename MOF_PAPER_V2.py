@@ -421,91 +421,142 @@ def calculate_impacts(
 # -----------------------------------------------------------------------------
 # PLOTTING HELPERS
 # -----------------------------------------------------------------------------
-def plot_sankey_diagram(results_list, dfs_list, route_id=None):
-    """Build a detailed Sankey diagram itemizing impacts by component."""
-    if not results_list or not dfs_list:
+def plot_sankey_diagram(results_list, contrib_df_all=None, step_df=None, route_id=None):
+    """
+    Build an itemised Sankey diagram for a given route.
+    - Electricity is broken down by process step (microfluidiser, mixing, freeze-drying, etc).
+    - Chemical supply is broken down by individual components.
+    Falls back to the original aggregate diagram if detailed data are missing.
+    """
+    if not results_list:
         return go.Figure()
 
-    # Find the index for the requested route
-    target_idx = 0
+    # Pick target route
     if route_id is not None:
-        found = False
-        for i, res in enumerate(results_list):
-            if res["id"] == route_id:
-                target_idx = i
-                found = True
-                break
-        if not found:
-             target_idx = 0
-    
-    target_res = results_list[target_idx]
-    target_df = dfs_list[target_idx]
+        target_res = next((r for r in results_list if r["id"] == route_id), None)
+        if target_res is None:
+            target_res = results_list[0]
+    else:
+        target_res = results_list[0]
 
-    # Aggregate by component to avoid duplicate nodes if same reagent appears twice
-    df_chart = target_df[target_df["GWP"] > 0].copy()
-    df_agg = df_chart.groupby(["Component", "Category"], as_index=False)["GWP"].sum()
-    df_agg = df_agg.sort_values("GWP", ascending=False)
-    
-    # Define Nodes
-    # Structure: [Input1, Input2, ..., Process, Output]
-    
-    # Inputs
-    input_labels = df_agg["Component"].tolist()
-    
-    # Process Node
-    process_label = "Bead Synthesis"
-    
-    # Output Node
-    output_label = "Total GWP"
-    
-    all_labels = input_labels + [process_label, output_label]
-    
-    # Indices
-    # Inputs: 0 to len(inputs)-1
-    # Process: len(inputs)
-    # Output: len(inputs) + 1
-    
-    process_idx = len(input_labels)
-    output_idx = len(input_labels) + 1
-    
-    # Colors
-    cat_color_map = {
-        "Electricity": "#FFD700",      # Gold
-        "Polymers": "#90EE90",         # LightGreen
-        "MOF Reagents": "#DA70D6",     # Orchid
-        "Solvents/Other": "#D3D3D3",   # LightGrey
-        "Logistics": "#F4A460"         # SandyBrown
-    }
-    
-    node_colors = []
-    link_colors = []
-    
-    # Input nodes colors
-    for cat in df_agg["Category"]:
-        node_colors.append(cat_color_map.get(cat, "#888888"))
-    
-    # Process and Output node colors
-    node_colors.append("#87CEFA") # Process (LightBlue)
-    node_colors.append("#FF6347") # Output (Tomato)
-    
-    # Links
-    sources = []
-    targets = []
-    values = []
-    
-    # 1. Inputs -> Process
-    for i, val in enumerate(df_agg["GWP"]):
-        sources.append(i)
-        targets.append(process_idx)
-        values.append(val)
-        # Link color same as node color
-        link_colors.append(node_colors[i])
-        
-    # 2. Process -> Output
-    sources.append(process_idx)
-    targets.append(output_idx)
-    values.append(target_res["Total GWP"])
-    link_colors.append("rgba(135, 206, 250, 0.6)") # Light blue flow
+    bead_name = target_res["name"]
+    route_key = target_res["id"]
+    total_gwp = target_res["Total GWP"]
+    elec_gwp_total = target_res["Electricity GWP"]
+
+    # If we have both component contributions and step-level electricity, do itemised diagram
+    chem_df = None
+    elec_steps_df = None
+
+    if contrib_df_all is not None and "Bead" in contrib_df_all.columns:
+        chem_df = contrib_df_all[contrib_df_all["Bead"] == bead_name].copy()
+        if "Category" in chem_df.columns:
+            chem_df = chem_df[chem_df["Category"] != "Electricity"]
+        chem_df = chem_df[chem_df["GWP"] > 0]
+
+    if step_df is not None and "route_id" in step_df.columns:
+        elec_steps_df = step_df[step_df["route_id"] == route_key].copy()
+        if not elec_steps_df.empty:
+            elec_steps_df = elec_steps_df[elec_steps_df["kWh_per_kg"] > 0]
+
+    if chem_df is not None and not chem_df.empty and elec_steps_df is not None and not elec_steps_df.empty:
+        # Build nodes: chemicals, electricity steps, lab synthesis, total
+        chem_labels = list(dict.fromkeys(chem_df["Component"].tolist()))
+
+        # Electricity step labels, prefixed so they are clearly electricity
+        elec_step_labels = []
+        for s in elec_steps_df["Step"].tolist():
+            elec_step_labels.append(f"Electricity: {s}")
+
+        lab_label = f"{bead_name} synthesis"
+        total_label = "Total GWP"
+
+        node_labels = chem_labels + elec_step_labels + [lab_label, total_label]
+
+        # Colour mapping: chemicals green, electricity yellow, lab blue, total red
+        node_colors = []
+        for lbl in node_labels:
+            low = lbl.lower()
+            if lbl == lab_label:
+                node_colors.append("#87CEFA")  # light blue
+            elif lbl == total_label:
+                node_colors.append("#FF6347")  # red
+            elif low.startswith("electricity:"):
+                node_colors.append("#FFD700")  # yellow
+            elif "transport" in low or "logistics" in low:
+                node_colors.append("#A9A9A9")  # grey
+            else:
+                node_colors.append("#90EE90")  # light green for chemicals
+
+        idx = {lbl: i for i, lbl in enumerate(node_labels)}
+
+        sources = []
+        targets = []
+        values = []
+
+        # Chemicals: each component -> lab synthesis
+        for _, row in chem_df.iterrows():
+            comp = row["Component"]
+            gwp_val = float(row["GWP"])
+            if gwp_val <= 0:
+                continue
+            if comp not in idx:
+                # Should not happen, but guard
+                continue
+            sources.append(idx[comp])
+            targets.append(idx[lab_label])
+            values.append(gwp_val)
+
+        # Electricity: split total electricity GWP across steps by kWh share
+        kwh_vals = elec_steps_df["kWh_per_kg"].to_numpy(dtype=float)
+        kwh_sum = float(kwh_vals.sum())
+        if kwh_sum > 0 and elec_gwp_total > 0:
+            for step_name, kwh in zip(elec_steps_df["Step"], kwh_vals):
+                frac = kwh / kwh_sum
+                gwp_step = elec_gwp_total * frac
+                lbl = f"Electricity: {step_name}"
+                sources.append(idx[lbl])
+                targets.append(idx[lab_label])
+                values.append(gwp_step)
+
+        # Lab -> total GWP (use sum of all incoming flows to avoid mismatch)
+        total_from_components = float(sum(values))
+        sources.append(idx[lab_label])
+        targets.append(idx[total_label])
+        values.append(total_from_components)
+
+        fig = go.Figure(
+            data=[
+                go.Sankey(
+                    node=dict(
+                        pad=15,
+                        thickness=20,
+                        line=dict(color="black", width=0.5),
+                        label=node_labels,
+                        color=node_colors,
+                    ),
+                    link=dict(
+                        source=sources,
+                        target=targets,
+                        value=values,
+                    ),
+                )
+            ]
+        )
+
+        fig.update_layout(
+            title_text=f"Impact flow (itemised): {bead_name}",
+            font_size=10,
+            height=400,
+        )
+        return fig
+
+    # Fallback: original aggregate version if we do not have enough detail
+    elec_gwp = target_res["Electricity GWP"]
+    chem_gwp = target_res["Non-Electric GWP"]
+
+    labels = ["Electricity Source", "Chemical Supply", "Lab Synthesis", "Total GWP"]
+    colors = ["#FFD700", "#90EE90", "#87CEFA", "#FF6347"]
 
     fig = go.Figure(
         data=[
@@ -514,14 +565,18 @@ def plot_sankey_diagram(results_list, dfs_list, route_id=None):
                     pad=15,
                     thickness=20,
                     line=dict(color="black", width=0.5),
-                    label=all_labels,
-                    color=node_colors,
+                    label=labels,
+                    color=colors,
                 ),
                 link=dict(
-                    source=sources,
-                    target=targets,
-                    value=values,
-                    color=link_colors,
+                    source=[0, 1, 2],
+                    target=[2, 2, 3],
+                    value=[elec_gwp, chem_gwp, total_gwp],
+                    color=[
+                        "rgba(255, 215, 0, 0.4)",
+                        "rgba(144, 238, 144, 0.4)",
+                        "rgba(135, 206, 250, 0.4)",
+                    ],
                 ),
             )
         ]
@@ -1060,10 +1115,10 @@ the electricity per kilogram of bead.
                 x="Bead",
                 y="Total GWP",
                 color="Bead",
-                log_y=False,
                 title="Total GWP per kg bead (baseline, FU1)",
                 text_auto=".2s",
             )
+            fig_log_base.update_yaxes(rangemode="tozero")
             st.plotly_chart(fig_log_base, use_container_width=True)
 
         with col2:
@@ -1073,10 +1128,10 @@ the electricity per kilogram of bead.
                 x="Bead",
                 y="Total GWP",
                 color="Bead",
-                log_y=False,
                 title="Total GWP per kg bead (scaled, FU1)",
                 text_auto=".2s",
             )
+            fig_log_scaled.update_yaxes(rangemode="tozero")
             st.plotly_chart(fig_log_scaled, use_container_width=True)
 
         # Electricity vs chemicals
@@ -1380,10 +1435,10 @@ the electricity per kilogram of bead.
                 y="kWh_per_kg",
                 color="Bead",
                 barmode="group",
-                log_y=False,
                 title="Electricity demand by process step (baseline, kWh per kg bead)",
                 text_auto=".2s",
             )
+            fig_steps_base.update_yaxes(rangemode="tozero")
             fig_steps_base.update_layout(xaxis_tickangle=-30)
             st.plotly_chart(fig_steps_base, use_container_width=True)
 
@@ -1395,10 +1450,10 @@ the electricity per kilogram of bead.
                 y="kWh_per_kg",
                 color="Bead",
                 barmode="group",
-                log_y=False,
                 title="Electricity demand by process step (scaled, kWh per kg bead)",
                 text_auto=".2s",
             )
+            fig_steps_scaled.update_yaxes(rangemode="tozero")
             fig_steps_scaled.update_layout(xaxis_tickangle=-30)
             st.plotly_chart(fig_steps_scaled, use_container_width=True)
 
@@ -1469,7 +1524,6 @@ the electricity per kilogram of bead.
                     color="Component",
                     title="Total GWP breakdown (baseline)",
                     barmode="group",
-                    log_y=False,
                 )
                 st.plotly_chart(fig_breakdown_base, use_container_width=True)
 
@@ -1482,7 +1536,6 @@ the electricity per kilogram of bead.
                     color="Component",
                     title="Total GWP breakdown (scaled)",
                     barmode="group",
-                    log_y=False,
                 )
                 st.plotly_chart(fig_breakdown_scaled, use_container_width=True)
 
@@ -1509,13 +1562,23 @@ the electricity per kilogram of bead.
             with col_ref1:
                 st.markdown("Baseline")
                 st.plotly_chart(
-                    plot_sankey_diagram(base_results_list, base_dfs_list, route_id=ID_REF),
+                    plot_sankey_diagram(
+                        base_results_list,
+                        contrib_df_all=df_all_base,
+                        step_df=step_df_baseline,
+                        route_id=ID_REF,
+                    ),
                     use_container_width=True,
                 )
             with col_ref2:
                 st.markdown("Scaled")
                 st.plotly_chart(
-                    plot_sankey_diagram(scaled_results_list, scaled_dfs_list, route_id=ID_REF),
+                    plot_sankey_diagram(
+                        scaled_results_list,
+                        contrib_df_all=df_all_scaled,
+                        step_df=step_df_scaled,
+                        route_id=ID_REF,
+                    ),
                     use_container_width=True,
                 )
 
@@ -1524,13 +1587,23 @@ the electricity per kilogram of bead.
             with col_mof1:
                 st.markdown("Baseline")
                 st.plotly_chart(
-                    plot_sankey_diagram(base_results_list, base_dfs_list, route_id=ID_MOF),
+                    plot_sankey_diagram(
+                        base_results_list,
+                        contrib_df_all=df_all_base,
+                        step_df=step_df_baseline,
+                        route_id=ID_MOF,
+                    ),
                     use_container_width=True,
                 )
             with col_mof2:
                 st.markdown("Scaled")
                 st.plotly_chart(
-                    plot_sankey_diagram(scaled_results_list, scaled_dfs_list, route_id=ID_MOF),
+                    plot_sankey_diagram(
+                        scaled_results_list,
+                        contrib_df_all=df_all_scaled,
+                        step_df=step_df_scaled,
+                        route_id=ID_MOF,
+                    ),
                     use_container_width=True,
                 )
 
@@ -1572,7 +1645,6 @@ the electricity per kilogram of bead.
                 x="Material",
                 y="GWP_kgCO2_per_kg",
                 color="Source",
-                log_y=False,
                 title="GWP comparison with literature (baseline)",
                 text="Source",
             )
@@ -1587,7 +1659,6 @@ the electricity per kilogram of bead.
                 x="Material",
                 y="GWP_kgCO2_per_kg",
                 color="Source",
-                log_y=False,
                 title="GWP comparison with literature (scaled)",
                 text="Source",
             )
