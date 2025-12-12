@@ -18,7 +18,7 @@ except ImportError:
 # -----------------------------------------------------------------------------
 BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = BASE_DIR / "data"
-LOGO_DIR = BASE_DIR / "assets"  # not used in this version, logos loaded from DATA_DIR
+LOGO_DIR = BASE_DIR / "assets"  # put ubc.png, ame.png, cov.png in ./assets
 
 # Route IDs
 ID_REF = "ref"
@@ -212,7 +212,7 @@ LIT_DF = st.session_state["lit_df"]
 # HEADER LOGOS
 # -----------------------------------------------------------------------------
 def render_header_logos():
-    cov_path = DATA_DIR / "cov.png"
+    cov_path = DATA_DIR  / "cov.png"
     ubc_path = DATA_DIR / "ubc.png"
 
     col_left, col_spacer, col_right = st.columns([1, 2, 1])
@@ -320,6 +320,7 @@ def calculate_impacts(
     route_id,
     ef_df,
     routes_df,
+    electricity_override_map=None, # New parameter for optional override
     efficiency_factor: float = 1.0,
     recycling_rate: float = 0.0,
     yield_rate: float = 100.0,
@@ -332,8 +333,12 @@ def calculate_impacts(
 
     yield_multiplier = 1.0 / (yield_rate / 100.0)
 
-    # Electricity
-    base_elec_kwh = float(route_data.iloc[0]["electricity_kwh_per_fu"])
+    # Electricity Logic: Check if we have an override (for modified scaling), else use CSV/Default
+    if electricity_override_map and route_id in electricity_override_map:
+        base_elec_kwh = electricity_override_map[route_id]
+    else:
+        base_elec_kwh = float(route_data.iloc[0]["electricity_kwh_per_fu"])
+    
     elec_kwh = base_elec_kwh * efficiency_factor * yield_multiplier
 
     elec_source = route_data.iloc[0]["electricity_source"]
@@ -421,7 +426,7 @@ def calculate_impacts(
 # -----------------------------------------------------------------------------
 # PLOTTING HELPERS
 # -----------------------------------------------------------------------------
-def plot_sankey_diagram(results_list, route_id=None):
+def plot_sankey_diagram(results_list, route_id=None, title_prefix=""):
     """Build a simple Sankey diagram for a given route (Ref or MOF)."""
     if not results_list:
         return go.Figure()
@@ -465,11 +470,19 @@ def plot_sankey_diagram(results_list, route_id=None):
     )
 
     fig.update_layout(
-        title_text=f"Impact flow: {target_res['name']}",
+        title_text=f"{title_prefix}{target_res['name']}",
         font_size=10,
         height=400,
     )
     return fig
+
+
+def get_electricity_step_data(equip_params) -> pd.DataFrame:
+    """
+    Electricity per process step, per kg bead, calculated from provided equipment settings.
+    """
+    _, step_df = compute_electricity_from_equipment(equip_params)
+    return step_df
 
 
 def create_system_boundary_figure() -> go.Figure:
@@ -677,126 +690,77 @@ def main():
         perf_df = st.session_state["perf_df"]
         lit_df = st.session_state["lit_df"]
 
-    # -------------------------------------------------------------------------
-    # EQUIPMENT SCENARIOS: BASELINE VS SCALED
-    # -------------------------------------------------------------------------
-    # Sync equipment parameters from widgets (scaled scenario)
+    # Sync equipment parameters from widget state
     sync_equipment_params_from_widgets()
-    equipment_params_scaled = st.session_state["equipment_params"]
-
-    # Baseline (default equipment settings) and scaled (current equipment tab)
-    route_elec_baseline, step_df_baseline = compute_electricity_from_equipment(EQUIPMENT_DEFAULTS)
-    route_elec_scaled, step_df_scaled = compute_electricity_from_equipment(equipment_params_scaled)
-
-    # Build two route tables: baseline and scaled
-    routes_base = routes_df.copy()
-    routes_scaled = routes_df.copy()
-
-    for rid, kwh_per_kg in route_elec_baseline.items():
-        routes_base.loc[routes_base["route_id"] == rid, "electricity_kwh_per_fu"] = kwh_per_kg
-
-    for rid, kwh_per_kg in route_elec_scaled.items():
-        routes_scaled.loc[routes_scaled["route_id"] == rid, "electricity_kwh_per_fu"] = kwh_per_kg
+    equipment_params_modified = st.session_state["equipment_params"]
+    
+    # CALCULATE ELECTRICITY FOR BOTH SCENARIOS
+    # 1. Baseline (Default equipment params)
+    route_elec_baseline, _ = compute_electricity_from_equipment(EQUIPMENT_DEFAULTS)
+    
+    # 2. Modified (User edited params)
+    route_elec_modified, _ = compute_electricity_from_equipment(equipment_params_modified)
 
     # -------------------------------------------------------------------------
-    # CALCULATIONS FOR BOTH SCENARIOS
+    # CALCULATIONS - RUN TWICE
     # -------------------------------------------------------------------------
     unique_routes = routes_df["route_id"].unique()
 
-    # Baseline
-    base_results_list = []
-    base_dfs_list = []
-
+    # --- Run Baseline ---
+    results_list_base = []
+    dfs_list_base = []
     for rid in unique_routes:
         res, df = calculate_impacts(
-            rid,
-            ef_df,
-            routes_base,
+            rid, ef_df, routes_df, 
+            electricity_override_map=route_elec_baseline, # use baseline elec
             efficiency_factor=eff_factor,
             recycling_rate=recycle_rate,
             yield_rate=yield_rate,
             transport_pct=transport_overhead,
         )
-
         if res:
-            if res["Total GWP"] > 0:
-                res["Electricity %"] = (res["Electricity GWP"] / res["Total GWP"]) * 100.0
-            else:
-                res["Electricity %"] = 0.0
+            res["Electricity %"] = (res["Electricity GWP"] / res["Total GWP"]) * 100.0 if res["Total GWP"] > 0 else 0.0
+            results_list_base.append(res)
+            dfs_list_base.append(df)
 
-            base_results_list.append(res)
-            base_dfs_list.append(df)
+    # --- Run Modified ---
+    results_list_mod = []
+    dfs_list_mod = []
+    for rid in unique_routes:
+        res, df = calculate_impacts(
+            rid, ef_df, routes_df, 
+            electricity_override_map=route_elec_modified, # use modified elec
+            efficiency_factor=eff_factor,
+            recycling_rate=recycle_rate,
+            yield_rate=yield_rate,
+            transport_pct=transport_overhead,
+        )
+        if res:
+            res["Electricity %"] = (res["Electricity GWP"] / res["Total GWP"]) * 100.0 if res["Total GWP"] > 0 else 0.0
+            results_list_mod.append(res)
+            dfs_list_mod.append(df)
 
-    if not base_results_list:
+    if not results_list_base:
         st.warning("No routes found. Check the input tables in the sidebar.")
         return
 
-    # Scaled (equipment tab)
-    scaled_results_list = []
-    scaled_dfs_list = []
-
-    for rid in unique_routes:
-        res, df = calculate_impacts(
-            rid,
-            ef_df,
-            routes_scaled,
-            efficiency_factor=eff_factor,
-            recycling_rate=recycle_rate,
-            yield_rate=yield_rate,
-            transport_pct=transport_overhead,
-        )
-
-        if res:
-            if res["Total GWP"] > 0:
-                res["Electricity %"] = (res["Electricity GWP"] / res["Total GWP"]) * 100.0
-            else:
-                res["Electricity %"] = 0.0
-
-            scaled_results_list.append(res)
-            scaled_dfs_list.append(df)
-
-    # Performance map (same for both)
-    perf_map = {
-        row["route_id"]: float(row["capacity_mg_g"]) for _, row in perf_df.iterrows()
-    }
-
-    # Summary tables
-    base_summary_rows = []
-    for r in base_results_list:
-        cap = perf_map.get(r["id"], 0.001)  # mg/g
-        base_summary_rows.append(
-            {
+    # Helper to make summary DF
+    def make_summary_df(res_list):
+        perf_map = {row["route_id"]: float(row["capacity_mg_g"]) for _, row in perf_df.iterrows()}
+        rows = []
+        for r in res_list:
+            cap = perf_map.get(r["id"], 0.001)
+            rows.append({
                 "Bead": r["name"],
                 "Total GWP": r["Total GWP"],
                 "Non-Electric GWP": r["Non-Electric GWP"],
                 "GWP per g Cu": r["Total GWP"] / cap,
-                "Electricity %": (r["Electricity GWP"] / r["Total GWP"]) * 100.0
-                if r["Total GWP"] > 0
-                else 0.0,
-            }
-        )
+                "Electricity %": (r["Electricity GWP"] / r["Total GWP"]) * 100.0 if r["Total GWP"] > 0 else 0.0,
+            })
+        return pd.DataFrame(rows)
 
-    scaled_summary_rows = []
-    for r in scaled_results_list:
-        cap = perf_map.get(r["id"], 0.001)  # mg/g
-        scaled_summary_rows.append(
-            {
-                "Bead": r["name"],
-                "Total GWP": r["Total GWP"],
-                "Non-Electric GWP": r["Non-Electric GWP"],
-                "GWP per g Cu": r["Total GWP"] / cap,
-                "Electricity %": (r["Electricity GWP"] / r["Total GWP"]) * 100.0
-                if r["Total GWP"] > 0
-                else 0.0,
-            }
-        )
-
-    base_sum_df = pd.DataFrame(base_summary_rows)
-    scaled_sum_df = pd.DataFrame(scaled_summary_rows)
-
-    # For AI and some downstream uses we keep scaled as the "current" scenario
-    results_list = scaled_results_list
-    dfs_list = scaled_dfs_list
+    sum_df_base = make_summary_df(results_list_base)
+    sum_df_mod = make_summary_df(results_list_mod)
 
     # -------------------------------------------------------------------------
     # TABS
@@ -812,794 +776,272 @@ def main():
         ]
     )
 
-    # --- NEW TAB: EQUIPMENT SCALING ---
+    # --- TAB: EQUIPMENT SCALING ---
     with tab_scale:
         st.header("Equipment utilisation and electricity scaling")
-
         st.markdown(
             """
 The electricity intensities used in the LCA are derived from the power and runtime of each
-unit operation, divided by an allocation mass (effective batch capacity):
-
-`kWh/kg = (power × time per batch) / allocation mass`.
-
-By increasing the allocation mass relative to the actual batch size, you can explore how
-better utilisation of the microfluidiser, stirred reactors and freeze dryer would lower
-the electricity per kilogram of bead.
+unit operation, divided by an allocation mass (effective batch capacity).
+Adjust the **Modified Scenario** values below. The graphs in other tabs will show the comparison.
 """
         )
 
         eq = st.session_state["equipment_params"]
 
         st.subheader("Ref-Bead (polymer) steps")
-
         for step_id in ["ref_micro", "ref_mix", "ref_cross", "ref_freeze"]:
             cfg = eq.get(step_id)
-            if cfg is None:
-                continue
-
+            if cfg is None: continue
             st.markdown(f"**{cfg['label']}**")
             col1, col2, col3, col4 = st.columns(4)
-            with col1:
-                st.number_input(
-                    "Power (kW)",
-                    min_value=0.0,
-                    value=float(cfg["power_kw"]),
-                    step=0.01,
-                    key=f"equip_{step_id}_power_kw",
-                )
-            with col2:
-                st.number_input(
-                    "Time per batch (h)",
-                    min_value=0.0,
-                    value=float(cfg["time_h"]),
-                    step=0.25,
-                    key=f"equip_{step_id}_time_h",
-                )
-            with col3:
-                st.number_input(
-                    "Bead mass per batch (g)",
-                    min_value=0.0001,
-                    value=float(cfg["batch_mass_g"]),
-                    step=0.01,
-                    key=f"equip_{step_id}_batch_mass_g",
-                )
-            with col4:
-                st.number_input(
-                    "Allocation mass / capacity (g)",
-                    min_value=0.0001,
-                    value=float(cfg["alloc_mass_g"]),
-                    step=0.01,
-                    key=f"equip_{step_id}_alloc_mass_g",
-                )
+            with col1: st.number_input("Power (kW)", min_value=0.0, value=float(cfg["power_kw"]), step=0.01, key=f"equip_{step_id}_power_kw")
+            with col2: st.number_input("Time per batch (h)", min_value=0.0, value=float(cfg["time_h"]), step=0.25, key=f"equip_{step_id}_time_h")
+            with col3: st.number_input("Bead mass per batch (g)", min_value=0.0001, value=float(cfg["batch_mass_g"]), step=0.01, key=f"equip_{step_id}_batch_mass_g")
+            with col4: st.number_input("Allocation mass (g)", min_value=0.0001, value=float(cfg["alloc_mass_g"]), step=0.01, key=f"equip_{step_id}_alloc_mass_g")
 
         st.subheader("U@Bead (MOF-functionalised) specific steps")
-
         for step_id in ["mof_stir_zr", "mof_stir_linker", "mof_freeze"]:
             cfg = eq.get(step_id)
-            if cfg is None:
-                continue
-
+            if cfg is None: continue
             st.markdown(f"**{cfg['label']}**")
             col1, col2, col3, col4 = st.columns(4)
-            with col1:
-                st.number_input(
-                    "Power (kW)",
-                    min_value=0.0,
-                    value=float(cfg["power_kw"]),
-                    step=0.01,
-                    key=f"equip_{step_id}_power_kw",
-                )
-            with col2:
-                st.number_input(
-                    "Time per batch (h)",
-                    min_value=0.0,
-                    value=float(cfg["time_h"]),
-                    step=0.25,
-                    key=f"equip_{step_id}_time_h",
-                )
-            with col3:
-                st.number_input(
-                    "Bead mass per batch (g)",
-                    min_value=0.0001,
-                    value=float(cfg["batch_mass_g"]),
-                    step=0.01,
-                    key=f"equip_{step_id}_batch_mass_g",
-                )
-            with col4:
-                st.number_input(
-                    "Allocation mass / capacity (g)",
-                    min_value=0.0001,
-                    value=float(cfg["alloc_mass_g"]),
-                    step=0.01,
-                    key=f"equip_{step_id}_alloc_mass_g",
-                )
+            with col1: st.number_input("Power (kW)", min_value=0.0, value=float(cfg["power_kw"]), step=0.01, key=f"equip_{step_id}_power_kw")
+            with col2: st.number_input("Time per batch (h)", min_value=0.0, value=float(cfg["time_h"]), step=0.25, key=f"equip_{step_id}_time_h")
+            with col3: st.number_input("Bead mass per batch (g)", min_value=0.0001, value=float(cfg["batch_mass_g"]), step=0.01, key=f"equip_{step_id}_batch_mass_g")
+            with col4: st.number_input("Allocation mass (g)", min_value=0.0001, value=float(cfg["alloc_mass_g"]), step=0.01, key=f"equip_{step_id}_alloc_mass_g")
 
-        # Show resulting electricity intensities from current settings
-        route_totals_scaled, step_df_scaled_current = compute_electricity_from_equipment(
-            st.session_state["equipment_params"]
-        )
-        route_totals_base, step_df_base_current = compute_electricity_from_equipment(EQUIPMENT_DEFAULTS)
-
-        st.markdown("### Electricity intensity per kilogram of bead (baseline vs scaled)")
-        col_e1, col_e2 = st.columns(2)
-        with col_e1:
-            st.markdown("**Baseline equipment (defaults)**")
-            summary_elec_base = pd.DataFrame(
-                {
-                    "Bead": ["Ref-Bead (Polymer)", "U@Bead (MOF-Functionalised)"],
-                    "Electricity kWh/kg": [
-                        route_totals_base.get(ID_REF, np.nan),
-                        route_totals_base.get(ID_MOF, np.nan),
-                    ],
-                }
-            )
-            st.dataframe(summary_elec_base.style.format({"Electricity kWh/kg": "{:.2e}"}))
-        with col_e2:
-            st.markdown("**Scaled equipment (current settings)**")
-            summary_elec_scaled = pd.DataFrame(
-                {
-                    "Bead": ["Ref-Bead (Polymer)", "U@Bead (MOF-Functionalised)"],
-                    "Electricity kWh/kg": [
-                        route_totals_scaled.get(ID_REF, np.nan),
-                        route_totals_scaled.get(ID_MOF, np.nan),
-                    ],
-                }
-            )
-            st.dataframe(summary_elec_scaled.style.format({"Electricity kWh/kg": "{:.2e}"}))
-
-        st.markdown("### Step-level electricity breakdown (kWh per kg bead)")
-        col_s1, col_s2 = st.columns(2)
-        with col_s1:
-            st.markdown("**Baseline equipment (defaults)**")
-            st.dataframe(step_df_baseline.style.format({"kWh_per_kg": "{:.2e}"}))
-        with col_s2:
-            st.markdown("**Scaled equipment (current settings)**")
-            st.dataframe(step_df_scaled.style.format({"kWh_per_kg": "{:.2e}"}))
+        # Electricity summary table (Baseline vs Modified)
+        st.markdown("### Electricity intensity comparison (kWh/kg)")
+        comp_data = {
+            "Bead": ["Ref-Bead (Polymer)", "U@Bead (MOF)"],
+            "Baseline (Default)": [route_elec_baseline.get(ID_REF, 0), route_elec_baseline.get(ID_MOF, 0)],
+            "Modified (Scaled)": [route_elec_modified.get(ID_REF, 0), route_elec_modified.get(ID_MOF, 0)],
+        }
+        st.dataframe(pd.DataFrame(comp_data).style.format({"Baseline (Default)": "{:.2e}", "Modified (Scaled)": "{:.2e}"}))
 
     # --- TAB 1: RESULTS ---
     with tab1:
-        st.header("LCA results")
+        st.header("LCA results: Baseline vs. Modified")
 
-        # Summary tables
-        col_t1, col_t2 = st.columns(2)
-        with col_t1:
-            st.subheader("Baseline (default equipment)")
-            st.dataframe(
-                base_sum_df.style.format(
-                    {
-                        "Total GWP": "{:.2e}",
-                        "Non-Electric GWP": "{:.2f}",
-                        "GWP per g Cu": "{:.2f}",
-                        "Electricity %": "{:.1f}%",
-                    }
-                )
-            )
-        with col_t2:
-            st.subheader("Scaled (from equipment tab)")
-            st.dataframe(
-                scaled_sum_df.style.format(
-                    {
-                        "Total GWP": "{:.2e}",
-                        "Non-Electric GWP": "{:.2f}",
-                        "GWP per g Cu": "{:.2f}",
-                        "Electricity %": "{:.1f}%",
-                    }
-                )
-            )
+        st.markdown("#### Summary Data")
+        c1, c2 = st.columns(2)
+        with c1:
+            st.caption("Baseline (Paper Defaults)")
+            st.dataframe(sum_df_base.style.format({"Total GWP": "{:.2e}", "Non-Electric GWP": "{:.2f}", "GWP per g Cu": "{:.2f}", "Electricity %": "{:.1f}%"}))
+        with c2:
+            st.caption("Modified Scenario (Scaled Equipment)")
+            st.dataframe(sum_df_mod.style.format({"Total GWP": "{:.2e}", "Non-Electric GWP": "{:.2f}", "GWP per g Cu": "{:.2f}", "Electricity %": "{:.1f}%"}))
 
+        # Charts Side by Side
         col1, col2 = st.columns(2)
-
+        
+        # LEFT: BASELINE
         with col1:
-            st.subheader("Total GWP per kg bead (baseline, FU1)")
-            fig_log_base = px.bar(
-                base_sum_df,
-                x="Bead",
-                y="Total GWP",
-                color="Bead",
-                log_y=True,
-                title="Total GWP per kg bead (baseline, FU1)",
-                text_auto=".2s",
-            )
+            st.subheader("Baseline: Total GWP (log)")
+            fig_log_base = px.bar(sum_df_base, x="Bead", y="Total GWP", color="Bead", log_y=True, title="Baseline: Total GWP (FU1)", text_auto=".2s")
             st.plotly_chart(fig_log_base, use_container_width=True)
 
-        with col2:
-            st.subheader("Total GWP per kg bead (scaled, FU1)")
-            fig_log_scaled = px.bar(
-                scaled_sum_df,
-                x="Bead",
-                y="Total GWP",
-                color="Bead",
-                log_y=True,
-                title="Total GWP per kg bead (scaled, FU1)",
-                text_auto=".2s",
-            )
-            st.plotly_chart(fig_log_scaled, use_container_width=True)
-
-        # Electricity vs chemicals
-        col_ec1, col_ec2 = st.columns(2)
-
-        with col_ec1:
-            st.subheader("Electricity versus chemicals (baseline)")
+            st.subheader("Baseline: Elec vs Chemicals")
             stack_data_base = []
-            for r in base_results_list:
-                stack_data_base.append(
-                    {
-                        "Bead": r["name"],
-                        "Source": "Electricity",
-                        "GWP": r["Electricity GWP"],
-                    }
-                )
-                stack_data_base.append(
-                    {
-                        "Bead": r["name"],
-                        "Source": "Chemicals and transport",
-                        "GWP": r["Non-Electric GWP"],
-                    }
-                )
-
-            fig_stack_base = px.bar(
-                pd.DataFrame(stack_data_base),
-                x="Bead",
-                y="GWP",
-                color="Source",
-                title="Electricity versus non electricity contributions (baseline)",
-                text_auto=".2s",
-            )
+            for r in results_list_base:
+                stack_data_base.append({"Bead": r["name"], "Source": "Electricity", "GWP": r["Electricity GWP"]})
+                stack_data_base.append({"Bead": r["name"], "Source": "Chemicals", "GWP": r["Non-Electric GWP"]})
+            fig_stack_base = px.bar(pd.DataFrame(stack_data_base), x="Bead", y="GWP", color="Source", title="Baseline Contribution", text_auto=".2s")
             st.plotly_chart(fig_stack_base, use_container_width=True)
 
-        with col_ec2:
-            st.subheader("Electricity versus chemicals (scaled)")
-            stack_data_scaled = []
-            for r in scaled_results_list:
-                stack_data_scaled.append(
-                    {
-                        "Bead": r["name"],
-                        "Source": "Electricity",
-                        "GWP": r["Electricity GWP"],
-                    }
-                )
-                stack_data_scaled.append(
-                    {
-                        "Bead": r["name"],
-                        "Source": "Chemicals and transport",
-                        "GWP": r["Non-Electric GWP"],
-                    }
-                )
+        # RIGHT: MODIFIED
+        with col2:
+            st.subheader("Modified: Total GWP (log)")
+            fig_log_mod = px.bar(sum_df_mod, x="Bead", y="Total GWP", color="Bead", log_y=True, title="Modified: Total GWP (FU1)", text_auto=".2s")
+            st.plotly_chart(fig_log_mod, use_container_width=True)
 
-            fig_stack_scaled = px.bar(
-                pd.DataFrame(stack_data_scaled),
-                x="Bead",
-                y="GWP",
-                color="Source",
-                title="Electricity versus non electricity contributions (scaled)",
-                text_auto=".2s",
-            )
-            st.plotly_chart(fig_stack_scaled, use_container_width=True)
+            st.subheader("Modified: Elec vs Chemicals")
+            stack_data_mod = []
+            for r in results_list_mod:
+                stack_data_mod.append({"Bead": r["name"], "Source": "Electricity", "GWP": r["Electricity GWP"]})
+                stack_data_mod.append({"Bead": r["name"], "Source": "Chemicals", "GWP": r["Non-Electric GWP"]})
+            fig_stack_mod = px.bar(pd.DataFrame(stack_data_mod), x="Bead", y="GWP", color="Source", title="Modified Contribution", text_auto=".2s")
+            st.plotly_chart(fig_stack_mod, use_container_width=True)
 
-        # Performance normalised impacts
-        col_fu1, col_fu2 = st.columns(2)
-        with col_fu1:
-            st.subheader("Performance normalised impacts (baseline, FU2)")
-            fig_fu2_base = px.bar(
-                base_sum_df,
-                x="Bead",
-                y="GWP per g Cu",
-                color="Bead",
-                title="GWP per g Cu removed (baseline, FU2)",
-                text_auto=".2f",
-            )
+        st.divider()
+        st.subheader("Performance Normalised (FU2)")
+        c1, c2 = st.columns(2)
+        with c1:
+            fig_fu2_base = px.bar(sum_df_base, x="Bead", y="GWP per g Cu", color="Bead", title="Baseline: GWP per g Cu", text_auto=".2f")
             st.plotly_chart(fig_fu2_base, use_container_width=True)
-
-        with col_fu2:
-            st.subheader("Performance normalised impacts (scaled, FU2)")
-            fig_fu2_scaled = px.bar(
-                scaled_sum_df,
-                x="Bead",
-                y="GWP per g Cu",
-                color="Bead",
-                title="GWP per g Cu removed (scaled, FU2)",
-                text_auto=".2f",
-            )
-            st.plotly_chart(fig_fu2_scaled, use_container_width=True)
-
-        st.subheader("System boundary (schematic)")
-        st.plotly_chart(create_system_boundary_figure(), use_container_width=True)
+        with c2:
+            fig_fu2_mod = px.bar(sum_df_mod, x="Bead", y="GWP per g Cu", color="Bead", title="Modified: GWP per g Cu", text_auto=".2f")
+            st.plotly_chart(fig_fu2_mod, use_container_width=True)
 
     # --- TAB 2: SENSITIVITY ---
     with tab2:
-        st.header("Sensitivity and scaling")
-
+        st.header("Sensitivity and scaling (Applied to Modified Scenario)")
+        # Note: Sensitivity usually applies logic on top of the current state.
+        # For simplicity, we keep the original sensitivity logic but apply it to the modified state context mostly.
+        
         # 1. Grid intensity sensitivity
         st.subheader("1. Grid intensity sensitivity")
-        col_sens1, col_sens2 = st.columns(2)
+        col_s1, col_s2 = st.columns([1, 2])
+        with col_s1:
+            st.write("Add custom grid point:")
+            new_grid_name = st.text_input("Grid name", "My local grid")
+            new_grid_val = st.number_input("Intensity", min_value=0.0, max_value=1.0, value=0.45)
+            if st.button("Add grid to chart"):
+                st.session_state["custom_grids"][new_grid_name] = new_grid_val
 
-        # Calculate for all grids for both baseline and scaled
-        sens_rows_base = []
-        sens_rows_scaled = []
-
+        sens_rows = []
         for g_name, g_val in st.session_state["custom_grids"].items():
             temp_ef = ef_df.copy()
-            temp_ef.loc[
-                temp_ef["reagent_name"].str.contains("Electricity"),
-                "GWP_kgCO2_per_kg",
-            ] = g_val
-
+            temp_ef.loc[temp_ef["reagent_name"].str.contains("Electricity"), "GWP_kgCO2_per_kg"] = g_val
+            # We calculate sensitivity using the Modified Equipment Params
             for rid in unique_routes:
-                # Baseline
-                res_base, _ = calculate_impacts(
-                    rid,
-                    temp_ef,
-                    routes_base,
+                res, _ = calculate_impacts(
+                    rid, temp_ef, routes_df,
+                    electricity_override_map=route_elec_modified,
                     efficiency_factor=eff_factor,
                     recycling_rate=recycle_rate,
                     yield_rate=yield_rate,
                     transport_pct=transport_overhead,
                 )
-                sens_rows_base.append(
-                    {
-                        "Grid": g_name,
-                        "Grid Value": g_val,
-                        "Bead": res_base["name"],
-                        "Total GWP": res_base["Total GWP"],
-                    }
-                )
+                sens_rows.append({"Grid": g_name, "Grid Value": g_val, "Bead": res["name"], "Total GWP": res["Total GWP"]})
 
-                # Scaled
-                res_scaled, _ = calculate_impacts(
-                    rid,
-                    temp_ef,
-                    routes_scaled,
-                    efficiency_factor=eff_factor,
-                    recycling_rate=recycle_rate,
-                    yield_rate=yield_rate,
-                    transport_pct=transport_overhead,
-                )
-                sens_rows_scaled.append(
-                    {
-                        "Grid": g_name,
-                        "Grid Value": g_val,
-                        "Bead": res_scaled["name"],
-                        "Total GWP": res_scaled["Total GWP"],
-                    }
-                )
-
-        df_sens_base = pd.DataFrame(sens_rows_base).sort_values("Grid Value")
-        df_sens_scaled = pd.DataFrame(sens_rows_scaled).sort_values("Grid Value")
-
-        with col_sens1:
-            st.markdown("**Baseline (default equipment)**")
-            fig_sens_base = px.line(
-                df_sens_base,
-                x="Grid",
-                y="Total GWP",
-                color="Bead",
-                markers=True,
-                title="Total GWP versus grid carbon intensity (baseline)",
-                hover_data=["Grid Value"],
-            )
-            st.plotly_chart(fig_sens_base, use_container_width=True)
-
-        with col_sens2:
-            st.markdown("**Scaled (equipment tab)**")
-            fig_sens_scaled = px.line(
-                df_sens_scaled,
-                x="Grid",
-                y="Total GWP",
-                color="Bead",
-                markers=True,
-                title="Total GWP versus grid carbon intensity (scaled)",
-                hover_data=["Grid Value"],
-            )
-            st.plotly_chart(fig_sens_scaled, use_container_width=True)
-
-        st.divider()
-
-        # 2. Batch scaling effect (fixed curve up to 100 kg)
-        st.subheader("2. Batch scaling effect (electricity driven)")
-
-        # lab batch sizes from the LCA inventory (kg per batch)
-        LAB_BATCH_REF_KG = 0.0004
-        LAB_BATCH_MOF_KG = 0.0006
-
-        batch_sizes = np.logspace(np.log10(0.0004), np.log10(100.0), num=40)
-
-        scale_rows_base = []
-        scale_rows_scaled = []
-
-        for rid in unique_routes:
-            # Baseline
-            base_res, _ = calculate_impacts(
-                rid,
-                ef_df,
-                routes_base,
-                efficiency_factor=1.0,
-                recycling_rate=0.0,
-                yield_rate=100.0,
-                transport_pct=transport_overhead,
-            )
-
-            # Scaled
-            scaled_res, _ = calculate_impacts(
-                rid,
-                ef_df,
-                routes_scaled,
-                efficiency_factor=1.0,
-                recycling_rate=0.0,
-                yield_rate=100.0,
-                transport_pct=transport_overhead,
-            )
-
-            if base_res is None or scaled_res is None:
-                continue
-
-            base_elec_intensity = base_res["Electricity kWh"]
-            scaled_elec_intensity = scaled_res["Electricity kWh"]
-
-            if rid == ID_REF:
-                lab_batch = LAB_BATCH_REF_KG
-            elif rid == ID_MOF:
-                lab_batch = LAB_BATCH_MOF_KG
-            else:
-                lab_batch = LAB_BATCH_REF_KG
-
-            for b_size in batch_sizes:
-                scale_factor = lab_batch / b_size
-
-                # Baseline
-                new_elec_intensity_base = base_elec_intensity * scale_factor
-                new_gwp_base = new_elec_intensity_base * base_res["Electricity EF Used"] + base_res["Non-Electric GWP"]
-                scale_rows_base.append(
-                    {
-                        "Batch size (kg)": b_size,
-                        "Bead": base_res["name"],
-                        "Estimated GWP": new_gwp_base,
-                    }
-                )
-
-                # Scaled
-                new_elec_intensity_scaled = scaled_elec_intensity * scale_factor
-                new_gwp_scaled = new_elec_intensity_scaled * scaled_res["Electricity EF Used"] + scaled_res["Non-Electric GWP"]
-                scale_rows_scaled.append(
-                    {
-                        "Batch size (kg)": b_size,
-                        "Bead": scaled_res["name"],
-                        "Estimated GWP": new_gwp_scaled,
-                    }
-                )
-
-        df_scale_base = pd.DataFrame(scale_rows_base)
-        df_scale_scaled = pd.DataFrame(scale_rows_scaled)
-
-        col_bs1, col_bs2 = st.columns(2)
-        with col_bs1:
-            st.markdown("**Baseline (default equipment)**")
-            fig_scale_base = px.line(
-                df_scale_base,
-                x="Batch size (kg)",
-                y="Estimated GWP",
-                color="Bead",
-                log_x=True,
-                log_y=True,
-                markers=True,
-                title="Projected GWP versus batch size (baseline, log–log)",
-            )
-            fig_scale_base.update_xaxes(range=[np.log10(0.0004), np.log10(100.0)])
-            st.plotly_chart(fig_scale_base, use_container_width=True)
-
-        with col_bs2:
-            st.markdown("**Scaled (equipment tab)**")
-            fig_scale_scaled = px.line(
-                df_scale_scaled,
-                x="Batch size (kg)",
-                y="Estimated GWP",
-                color="Bead",
-                log_x=True,
-                log_y=True,
-                markers=True,
-                title="Projected GWP versus batch size (scaled, log–log)",
-            )
-            fig_scale_scaled.update_xaxes(range=[np.log10(0.0004), np.log10(100.0)])
-            st.plotly_chart(fig_scale_scaled, use_container_width=True)
+        df_sens = pd.DataFrame(sens_rows).sort_values("Grid Value")
+        fig_sens = px.line(df_sens, x="Grid", y="Total GWP", color="Bead", markers=True, title="Total GWP vs Grid (using Modified Equipment)", hover_data=["Grid Value"])
+        st.plotly_chart(fig_sens, use_container_width=True)
 
         st.divider()
 
         # 3. Electricity demand per process step
-        st.subheader("3. Electricity demand per process step")
-
-        col_step1, col_step2 = st.columns(2)
-
-        with col_step1:
-            st.markdown("**Baseline (default equipment)**")
-            fig_steps_base = px.bar(
-                step_df_baseline,
-                x="Step",
-                y="kWh_per_kg",
-                color="Bead",
-                barmode="group",
-                log_y=True,
-                title="Electricity demand by process step (baseline, kWh per kg bead)",
-                text_auto=".2s",
-            )
+        st.subheader("3. Electricity demand per process step comparison")
+        c1, c2 = st.columns(2)
+        with c1:
+            step_df_base = get_electricity_step_data(EQUIPMENT_DEFAULTS)
+            fig_steps_base = px.bar(step_df_base, x="Step", y="kWh_per_kg", color="Bead", barmode="group", log_y=True, title="Baseline: Elec Demand", text_auto=".2s")
             fig_steps_base.update_layout(xaxis_tickangle=-30)
             st.plotly_chart(fig_steps_base, use_container_width=True)
-
-        with col_step2:
-            st.markdown("**Scaled (equipment tab)**")
-            fig_steps_scaled = px.bar(
-                step_df_scaled,
-                x="Step",
-                y="kWh_per_kg",
-                color="Bead",
-                barmode="group",
-                log_y=True,
-                title="Electricity demand by process step (scaled, kWh per kg bead)",
-                text_auto=".2s",
-            )
-            fig_steps_scaled.update_layout(xaxis_tickangle=-30)
-            st.plotly_chart(fig_steps_scaled, use_container_width=True)
+        with c2:
+            step_df_mod = get_electricity_step_data(equipment_params_modified)
+            fig_steps_mod = px.bar(step_df_mod, x="Step", y="kWh_per_kg", color="Bead", barmode="group", log_y=True, title="Modified: Elec Demand", text_auto=".2s")
+            fig_steps_mod.update_layout(xaxis_tickangle=-30)
+            st.plotly_chart(fig_steps_mod, use_container_width=True)
 
     # --- TAB 3: INVENTORY ---
     with tab3:
         st.header("Inventory and impact breakdown")
 
-        # Baseline contributions
-        all_contribs_base = []
-        for i, df in enumerate(base_dfs_list):
-            df_b = df.copy()
-            df_b["Bead"] = base_results_list[i]["name"]
-            all_contribs_base.append(df_b)
-        df_all_base = pd.concat(all_contribs_base) if all_contribs_base else pd.DataFrame()
+        # Helper to combine DFs
+        def get_combined_breakdown(dfs, res_list):
+            comb = []
+            for i, d in enumerate(dfs):
+                d = d.copy()
+                d["Bead"] = res_list[i]["name"]
+                comb.append(d)
+            return pd.concat(comb) if comb else pd.DataFrame()
 
-        # Scaled contributions
-        all_contribs_scaled = []
-        for i, df in enumerate(scaled_dfs_list):
-            df_s = df.copy()
-            df_s["Bead"] = scaled_results_list[i]["name"]
-            all_contribs_scaled.append(df_s)
-        df_all_scaled = pd.concat(all_contribs_scaled) if all_contribs_scaled else pd.DataFrame()
+        df_all_base = get_combined_breakdown(dfs_list_base, results_list_base)
+        df_all_mod = get_combined_breakdown(dfs_list_mod, results_list_mod)
 
-        if not df_all_base.empty and not df_all_scaled.empty:
-            # A. Chemical impacts (excluding electricity)
-            st.subheader("A. Chemical impacts (excluding electricity)")
-            col_inv1, col_inv2 = st.columns(2)
+        if not df_all_base.empty:
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.subheader("Baseline Breakdown")
+                fig_br_base = px.bar(df_all_base, x="Bead", y="GWP", color="Component", title="Baseline: Total Breakdown (log)", barmode="group", log_y=True)
+                st.plotly_chart(fig_br_base, use_container_width=True)
+                
+                st.markdown("**Baseline Sankey (Ref)**")
+                st.plotly_chart(plot_sankey_diagram(results_list_base, route_id=ID_REF, title_prefix="Baseline: "), use_container_width=True)
+                st.markdown("**Baseline Sankey (MOF)**")
+                st.plotly_chart(plot_sankey_diagram(results_list_base, route_id=ID_MOF, title_prefix="Baseline: "), use_container_width=True)
 
-            df_ne_base = df_all_base[df_all_base["Category"] != "Electricity"]
-            df_ne_scaled = df_all_scaled[df_all_scaled["Category"] != "Electricity"]
+            with col2:
+                st.subheader("Modified Breakdown")
+                fig_br_mod = px.bar(df_all_mod, x="Bead", y="GWP", color="Component", title="Modified: Total Breakdown (log)", barmode="group", log_y=True)
+                st.plotly_chart(fig_br_mod, use_container_width=True)
 
-            with col_inv1:
-                st.markdown("**Baseline (default equipment)**")
-                fig_ne_base = px.bar(
-                    df_ne_base,
-                    x="Bead",
-                    y="GWP",
-                    color="Component",
-                    title="Chemical GWP (no electricity, baseline)",
-                    barmode="group",
-                )
-                st.plotly_chart(fig_ne_base, use_container_width=True)
-
-            with col_inv2:
-                st.markdown("**Scaled (equipment tab)**")
-                fig_ne_scaled = px.bar(
-                    df_ne_scaled,
-                    x="Bead",
-                    y="GWP",
-                    color="Component",
-                    title="Chemical GWP (no electricity, scaled)",
-                    barmode="group",
-                )
-                st.plotly_chart(fig_ne_scaled, use_container_width=True)
-
-            st.divider()
-
-            # B. Total breakdown (log scale)
-            st.subheader("B. Total breakdown (log scale)")
-            col_tb1, col_tb2 = st.columns(2)
-
-            with col_tb1:
-                st.markdown("**Baseline (default equipment)**")
-                fig_breakdown_base = px.bar(
-                    df_all_base,
-                    x="Bead",
-                    y="GWP",
-                    color="Component",
-                    title="Total GWP breakdown (baseline, log scale)",
-                    barmode="group",
-                    log_y=True,
-                )
-                st.plotly_chart(fig_breakdown_base, use_container_width=True)
-
-            with col_tb2:
-                st.markdown("**Scaled (equipment tab)**")
-                fig_breakdown_scaled = px.bar(
-                    df_all_scaled,
-                    x="Bead",
-                    y="GWP",
-                    color="Component",
-                    title="Total GWP breakdown (scaled, log scale)",
-                    barmode="group",
-                    log_y=True,
-                )
-                st.plotly_chart(fig_breakdown_scaled, use_container_width=True)
-
-            st.divider()
-
-            # C. Mass inventory per kg bead (same in both cases)
-            st.subheader("C. Mass inventory per kg bead")
-            fig_mass = px.bar(
-                df_ne_base,
-                x="Component",
-                y="Mass (kg)",
-                color="Component",
-                facet_col="Bead",
-                title="Mass input per kg product",
-            )
-            fig_mass.update_yaxes(matches=None, showticklabels=True)
-            st.plotly_chart(fig_mass, use_container_width=True)
-
-            # D. Impact flow (Sankey diagrams)
-            st.subheader("D. Impact flow (Sankey diagrams)")
-
-            st.markdown("**Ref-Bead (polymer only)**")
-            col_ref1, col_ref2 = st.columns(2)
-            with col_ref1:
-                st.markdown("Baseline")
-                st.plotly_chart(
-                    plot_sankey_diagram(base_results_list, route_id=ID_REF),
-                    use_container_width=True,
-                )
-            with col_ref2:
-                st.markdown("Scaled")
-                st.plotly_chart(
-                    plot_sankey_diagram(scaled_results_list, route_id=ID_REF),
-                    use_container_width=True,
-                )
-
-            st.markdown("**U@Bead (MOF functionalised)**")
-            col_mof1, col_mof2 = st.columns(2)
-            with col_mof1:
-                st.markdown("Baseline")
-                st.plotly_chart(
-                    plot_sankey_diagram(base_results_list, route_id=ID_MOF),
-                    use_container_width=True,
-                )
-            with col_mof2:
-                st.markdown("Scaled")
-                st.plotly_chart(
-                    plot_sankey_diagram(scaled_results_list, route_id=ID_MOF),
-                    use_container_width=True,
-                )
+                st.markdown("**Modified Sankey (Ref)**")
+                st.plotly_chart(plot_sankey_diagram(results_list_mod, route_id=ID_REF, title_prefix="Modified: "), use_container_width=True)
+                st.markdown("**Modified Sankey (MOF)**")
+                st.plotly_chart(plot_sankey_diagram(results_list_mod, route_id=ID_MOF, title_prefix="Modified: "), use_container_width=True)
 
     # --- TAB 4: LITERATURE ---
     with tab4:
         st.header("Literature comparison")
+        # We generally compare the "Modified" result to literature to see if improvement makes it competitive
+        current_data = []
+        for r in results_list_mod:
+            current_data.append({
+                "Material": f"{r['name']} (Modified Scen.)",
+                "GWP_kgCO2_per_kg": r["Total GWP"],
+                "Source": "This work (Modified)",
+                "Type": "This work",
+            })
+        # Optionally add baseline to literature chart too?
+        for r in results_list_base:
+            current_data.append({
+                "Material": f"{r['name']} (Baseline)",
+                "GWP_kgCO2_per_kg": r["Total GWP"],
+                "Source": "This work (Baseline)",
+                "Type": "This work",
+            })
 
-        # Baseline
-        current_data_base = []
-        for r in base_results_list:
-            current_data_base.append(
-                {
-                    "Material": f"{r['name']} (baseline, this work)",
-                    "GWP_kgCO2_per_kg": r["Total GWP"],
-                    "Source": "This work (baseline)",
-                    "Type": "This work",
-                }
-            )
-
-        # Scaled
-        current_data_scaled = []
-        for r in scaled_results_list:
-            current_data_scaled.append(
-                {
-                    "Material": f"{r['name']} (scaled, this work)",
-                    "GWP_kgCO2_per_kg": r["Total GWP"],
-                    "Source": "This work (scaled)",
-                    "Type": "This work",
-                }
-            )
-
-        col_lit1, col_lit2 = st.columns(2)
-
-        with col_lit1:
-            st.subheader("Baseline (default equipment)")
-            lit_combined_base = pd.concat([lit_df, pd.DataFrame(current_data_base)])
-            fig_lit_base = px.bar(
-                lit_combined_base,
-                x="Material",
-                y="GWP_kgCO2_per_kg",
-                color="Source",
-                log_y=True,
-                title="GWP comparison with literature (baseline, log scale)",
-                text="Source",
-            )
-            fig_lit_base.update_layout(xaxis_tickangle=-45)
-            st.plotly_chart(fig_lit_base, use_container_width=True)
-
-        with col_lit2:
-            st.subheader("Scaled (equipment tab)")
-            lit_combined_scaled = pd.concat([lit_df, pd.DataFrame(current_data_scaled)])
-            fig_lit_scaled = px.bar(
-                lit_combined_scaled,
-                x="Material",
-                y="GWP_kgCO2_per_kg",
-                color="Source",
-                log_y=True,
-                title="GWP comparison with literature (scaled, log scale)",
-                text="Source",
-            )
-            fig_lit_scaled.update_layout(xaxis_tickangle=-45)
-            st.plotly_chart(fig_lit_scaled, use_container_width=True)
+        lit_combined = pd.concat([lit_df, pd.DataFrame(current_data)])
+        fig_lit = px.bar(
+            lit_combined,
+            x="Material",
+            y="GWP_kgCO2_per_kg",
+            color="Source",
+            log_y=True,
+            title="GWP comparison: Baseline vs Modified vs Literature",
+            text="Source",
+        )
+        fig_lit.update_layout(xaxis_tickangle=-45)
+        st.plotly_chart(fig_lit, use_container_width=True)
 
     # --- TAB 5: AI INSIGHTS ---
     with tab5:
-        st.header("AI insights")
-        st.caption(
-            "Ask questions about the current results. You can focus on one bead or consider both together."
-        )
-
-        # Optional route focus – uses the scaled (current) scenario
-        route_name_map = {r["id"]: r["name"] for r in scaled_results_list}
+        st.header("AI insights (Modified Scenario)")
+        st.caption("The AI analyzes the *Modified* scenario results.")
+        
+        # Focus on modified results for AI
+        route_name_map = {r["id"]: r["name"] for r in results_list_mod}
         focus_options = ["All routes"]
         for rid in unique_routes:
             if rid in route_name_map:
                 focus_options.append(route_name_map[rid])
 
-        focus_choice = st.radio(
-            "Route focus (optional)",
-            options=focus_options,
-            index=0,
-            help="Select a bead to focus the AI summary, or keep 'All routes'.",
-        )
-
+        focus_choice = st.radio("Route focus", options=focus_options, index=0)
+        
         if focus_choice == "All routes":
-            ai_context_results = scaled_results_list
+            ai_context_results = results_list_mod
         else:
-            chosen_id = None
-            for rid, name in route_name_map.items():
-                if name == focus_choice:
-                    chosen_id = rid
-                    break
+            chosen_id = next((rid for rid, name in route_name_map.items() if name == focus_choice), None)
+            ai_context_results = [r for r in results_list_mod if r["id"] == chosen_id] if chosen_id else results_list_mod
 
-            if chosen_id is None:
-                ai_context_results = scaled_results_list
-            else:
-                ai_context_results = [r for r in scaled_results_list if r["id"] == chosen_id]
-
-        st.write("Sample questions (click to populate the box):")
+        st.write("Sample questions:")
         col_q1, col_q2 = st.columns(2)
         sample_questions = [
-            "Why is the GWP so high compared to literature?",
-            "Compare Ref-Bead and U@Bead results.",
-            "What is the biggest hotspot in this scenario?",
-            "How can I reduce the carbon footprint of bead production?",
+            "How does the modified scaling affect the GWP?",
+            "Compare Ref-Bead and U@Bead results in this scenario.",
+            "What is the biggest hotspot now?",
+            "How can I reduce the carbon footprint further?",
         ]
-
-        # Ensure the session key exists for the text area
-        if "ai_custom_q" not in st.session_state:
-            st.session_state["ai_custom_q"] = ""
-
+        
+        if "ai_custom_q" not in st.session_state: st.session_state["ai_custom_q"] = ""
         for i, q in enumerate(sample_questions):
-            col = col_q1 if i % 2 == 0 else col_q2
-            with col:
-                if st.button(q, key=f"sample_q_{i}"):
-                    st.session_state["ai_custom_q"] = q
-
-        user_q = st.text_area(
-            "Type your question about the LCA results:",
-            key="ai_custom_q",
-            height=140,
-        )
-
+            with (col_q1 if i % 2 == 0 else col_q2):
+                if st.button(q, key=f"sample_q_{i}"): st.session_state["ai_custom_q"] = q
+        
+        user_q = st.text_area("Type your question:", key="ai_custom_q", height=140)
         if st.button("Analyse results"):
             if user_q.strip():
-                with st.spinner("AI is analysing your data..."):
+                with st.spinner("AI is analysing..."):
                     answer = get_ai_insight(ai_context_results, user_q)
                 st.markdown("### AI analysis")
                 st.info(answer)
             else:
-                st.warning("Please enter a question or click one of the sample prompts.")
-
+                st.warning("Please enter a question.")
 
 if __name__ == "__main__":
     main()
